@@ -19,7 +19,7 @@ export const LoginPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [request, setRequest] = useState({ name: '', email: '', matricula: '', setor: '', password: '', confirmPassword: '' });
+  const [request, setRequest] = useState({ name: '', email: '', matricula: '', setor: '', perfil: '', password: '', confirmPassword: '' });
   const { login } = useContext(AuthContext);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -53,7 +53,7 @@ export const LoginPage: React.FC = () => {
     const cleanEmail = request.email.trim().toLowerCase();
     const cleanName = request.name.trim().replace(/\s+/g, ' ');
     const cleanMatricula = request.matricula.trim();
-    if (!cleanName || !cleanEmail || !cleanMatricula || !request.setor) {
+    if (!cleanName || !cleanEmail || !cleanMatricula || !request.setor || !request.perfil) {
       setError('Preencha todos os campos obrigatórios.'); setLoading(false); return;
     }
     if (request.password.length < 6) {
@@ -70,7 +70,13 @@ export const LoginPage: React.FC = () => {
         password: request.password,
         options: {
           emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
-          data: { classifica_access_request: true, full_name: cleanName, matricula: cleanMatricula, setor: request.setor },
+          data: { 
+            classifica_access_request: true, 
+            full_name: cleanName, 
+            matricula: cleanMatricula, 
+            setor: request.setor,
+            perfil: request.perfil
+          },
         },
       });
       if (signUpError) throw signUpError;
@@ -80,12 +86,12 @@ export const LoginPage: React.FC = () => {
       setNotice(data.session
         ? 'Solicitação enviada para análise. O acesso será liberado somente após aprovação de um administrador.'
         : 'Cadastro recebido. Se o Supabase solicitar, confirme seu e-mail; a solicitação ficará disponível para análise e o acesso depende da aprovação administrativa.');
-      setRequest({ name: '', email: '', matricula: '', setor: '', password: '', confirmPassword: '' });
+      setRequest({ name: '', email: '', matricula: '', setor: '', perfil: '', password: '', confirmPassword: '' });
       setMode('login');
     } catch (err: any) {
       await supabase.auth.signOut().catch(() => undefined);
-      // Mensagem não confirma se um endereço já possui conta cadastrada.
-      setError('Não foi possível enviar a solicitação. Confira os dados ou contate um administrador.');
+      const msg = err?.message || err?.error_description || 'Não foi possível enviar a solicitação.';
+      setError(`${msg}. Confira os dados ou contate um administrador.`);
     } finally { setLoading(false); }
   };
 
@@ -178,6 +184,7 @@ export const LoginPage: React.FC = () => {
             <div><label className={labelClass} htmlFor="request-email">E-mail institucional</label><div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input id="request-email" type="email" required maxLength={254} autoComplete="email" className={inputClass} placeholder="nome@instituicao.gov.br" value={request.email} onChange={e => setRequest({ ...request, email: e.target.value })} /></div></div>
             <div><label className={labelClass} htmlFor="request-matricula">Matrícula</label><div className="relative"><BadgeCheck className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input id="request-matricula" required maxLength={40} autoComplete="off" className={inputClass} value={request.matricula} onChange={e => setRequest({ ...request, matricula: e.target.value })} /></div></div>
             <div><label className={labelClass} htmlFor="request-sector">Setor</label><div className="relative"><Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><select id="request-sector" required className={inputClass} value={request.setor} onChange={e => setRequest({ ...request, setor: e.target.value })}><option value="" disabled>Selecione o setor</option>{SECTORS.map(s => <option key={s} value={s}>{s}</option>)}</select></div></div>
+            <div><label className={labelClass} htmlFor="request-perfil">Perfil Profissional</label><div className="relative"><UserRoundPlus className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><select id="request-perfil" required className={inputClass} value={request.perfil} onChange={e => setRequest({ ...request, perfil: e.target.value })}><option value="" disabled>Selecione seu perfil</option><option>Analista de Meio Ambiente</option><option>Técnico de Meio Ambiente</option><option>Residente Técnico</option><option>Estagiário de Nível Superior</option><option>Estagiário de Nível Médio</option><option>Técnico de Desenvolvimento econômico e social</option></select></div></div>
             <div><label className={labelClass} htmlFor="request-password">Criar senha</label><div className="relative"><Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input id="request-password" type={showPassword ? 'text' : 'password'} required minLength={6} autoComplete="new-password" className="w-full pl-10 pr-10 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" value={request.password} onChange={e => setRequest({ ...request, password: e.target.value })} /><button type="button" aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'} onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></div><p className="text-[10px] text-slate-400 mt-1">Use pelo menos 6 caracteres. A senha é tratada pelo Supabase Auth, não salva na solicitação.</p></div>
             <div><label className={labelClass} htmlFor="request-confirm">Confirmar senha</label><div className="relative"><CheckCircle2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input id="request-confirm" type="password" required minLength={6} autoComplete="new-password" className={inputClass} value={request.confirmPassword} onChange={e => setRequest({ ...request, confirmPassword: e.target.value })} /></div></div>
             {error && <div role="alert" className="p-3 bg-red-50 border border-red-100 text-red-600 text-sm rounded-lg">{error}</div>}

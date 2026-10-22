@@ -273,6 +273,8 @@ export type UserRole = 'Administrador' | 'Analista' | 'Visualizador';
 
 export type UserSector = 'SETOR DE CLASSIFICAÇÃO DE BARRAGENS' | 'SETOR DE FISCALIZAÇÃO E MONITORAMENTO' | 'SETOR ADMINISTRATIVO' | 'COORDENADOR';
 
+export type UserPerfil = 'Analista de Meio Ambiente' | 'Técnico de Meio Ambiente' | 'Residente Técnico' | 'Estagiário de Nível Superior' | 'Estagiário de Nível Médio' | 'Técnico de Desenvolvimento econômico e social';
+
 export interface User {
   id: string;
   authUserId: string;
@@ -281,6 +283,7 @@ export interface User {
   name: string;
   role: UserRole;
   setor?: UserSector | null;
+  perfil?: UserPerfil | null;
   matricula?: string;
   active: boolean;
   forcePasswordChange: boolean;
