@@ -1,0 +1,6 @@
+{
+  "name": "R.1 - Sistema Classifica Barragens - SEMA/MT",
+  "description": "Sistema para automatização de pareceres técnicos de classificação de barragens para a SEMA/MT.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

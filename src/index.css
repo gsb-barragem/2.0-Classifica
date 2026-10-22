@@ -1,0 +1,59 @@
+@import url("https://db.onlinewebfonts.com/c/08796695fb42d32789182d3b246a4d79?family=Nexa+Light");
+@import "tailwindcss";
+
+@theme {
+  --animate-pulse-slow: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-fade-in: fade-in 0.5s ease-out forwards;
+  --font-nexa: "Nexa Light", sans-serif;
+
+  @keyframes pulse-slow {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}
+
+.custom-map-tooltip {
+  background: rgba(255, 255, 255, 0.95) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+  padding: 0 !important;
+}
+
+.map-muni-tooltip {
+  background: rgba(15, 23, 42, 0.8) !important;
+  backdrop-filter: blur(4px);
+  border: none !important;
+  border-radius: 6px !important;
+  color: white !important;
+  font-weight: 700 !important;
+  font-size: 10px !important;
+  padding: 4px 8px !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+}
+
+.map-muni-tooltip::before {
+  display: none !important;
+}
+
+.custom-map-tooltip::before {
+  border-top-color: rgba(255, 255, 255, 0.95) !important;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #f8fafc;
+}
+
+/* Fix for Leaflet in some contexts */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
