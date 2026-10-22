@@ -32,13 +32,14 @@ export const LoginPage: React.FC = () => {
     }
     try {
       const result = await login(email.trim().toLowerCase(), password);
-      if (result.success) await logActivity('LOGIN_SUCCESS');
-      else {
-        await logActivity('LOGIN_FAIL');
+      if (result.success) {
+        void logActivity('LOGIN_SUCCESS').catch(() => undefined);
+      } else {
+        void logActivity('LOGIN_FAIL').catch(() => undefined);
         setError(result.message || 'E-mail ou senha inválidos.');
       }
-    } catch {
-      setError('Não foi possível entrar. Confira os dados e tente novamente.');
+    } catch (err: any) {
+      setError(err?.message || 'Não foi possível entrar. Confira os dados e tente novamente.');
     } finally { setLoading(false); }
   };
 
