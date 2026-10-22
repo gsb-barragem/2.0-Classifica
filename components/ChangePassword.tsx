@@ -36,7 +36,15 @@ export const ChangePassword: React.FC<ChangePasswordProps> = ({ forced = false, 
       if (updateError) throw new Error('Não foi possível atualizar a senha no Supabase Auth.');
       if (forced || currentUser?.forcePasswordChange) {
         const { error: rpcError } = await supabase.rpc('classifica_finish_password_change');
-        if (rpcError) throw new Error('A senha foi alterada, mas não foi possível registrar a conclusão no perfil. Contate um administrador antes de sair.');
+        if (rpcError) {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            await supabase
+              .from('users')
+              .update({ force_password_change: false, force_password_change_at: new Date().toISOString() })
+              .eq('auth_user_id', user.id);
+          }
+        }
       }
       await logActivity('PASSWORD_CHANGED');
       await refreshProfile();

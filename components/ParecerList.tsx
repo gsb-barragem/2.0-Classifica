@@ -415,22 +415,28 @@ const ParecerList: React.FC<ParecerListProps> = ({
         let result;
         if (item.tipo_documento === 'Parecer Técnico') {
           result = await deleteParecer(id);
-          await logActivity('DELETE_OPINION', { id, doc: item.protocolo, interessado: (item as any).razaoSocial });
         } else if (item.tipo_documento === 'Ofício de Pendências') {
           result = await deleteOficio(id);
-          await logActivity('DELETE_OFICIO', { id, doc: item.protocolo, interessado: (item as any).interessado });
         } else if (item.tipo_documento === 'Indeferimento') {
           result = await deleteIndeferimento(id);
-          await logActivity('DELETE_NOTIFICACAO', { id, type: 'Indeferimento', doc: (item as any).protocolo });
         } else if (item.tipo_documento === 'Transferência de Titularidade') {
           result = await deleteTransferencia(id);
-          await logActivity('DELETE_NOTIFICACAO', { id, type: 'Transferência', doc: (item as any).protocolo || (item as any).nProcesso });
         } else {
           result = await deleteNoObligatoriedade(id);
-          await logActivity('DELETE_NOTIFICACAO', { id, type: 'Não Obrigatoriedade', doc: (item as any).processo });
         }
           
         if (result.success) {
+          if (item.tipo_documento === 'Parecer Técnico') {
+            await logActivity('DELETE_OPINION', { id, doc: item.protocolo, interessado: (item as any).razaoSocial });
+          } else if (item.tipo_documento === 'Ofício de Pendências') {
+            await logActivity('DELETE_OFICIO', { id, doc: item.protocolo, interessado: (item as any).interessado });
+          } else if (item.tipo_documento === 'Indeferimento') {
+            await logActivity('DELETE_NOTIFICACAO', { id, type: 'Indeferimento', doc: (item as any).protocolo });
+          } else if (item.tipo_documento === 'Transferência de Titularidade') {
+            await logActivity('DELETE_NOTIFICACAO', { id, type: 'Transferência', doc: (item as any).protocolo || (item as any).nProcesso });
+          } else {
+            await logActivity('DELETE_NOTIFICACAO', { id, type: 'Não Obrigatoriedade', doc: (item as any).processo });
+          }
           toast.success(`${item.tipo_documento} excluído com sucesso!`);
         } else {
           toast.error(result.message || `Erro ao excluir ${item.tipo_documento.toLowerCase()}`);

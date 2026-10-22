@@ -179,14 +179,7 @@ const OficioForm: React.FC<OficioFormProps> = ({ onBack, initialData, readOnly }
     }
     setLoading(true);
     try {
-      // Buscar o nome do analista no banco
-      const { data: userData } = await supabase
-        .from('users')
-        .select('name')
-        .eq('id', currentUser.id)
-        .maybeSingle();
-      
-      const userName = userData?.name || currentUser.name || 'Analista';
+      const userName = currentUser.name || 'Analista';
 
       const payload = {
         ...formData,

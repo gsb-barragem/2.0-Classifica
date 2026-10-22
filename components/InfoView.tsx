@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../src/supabaseClient';
+import { supabase, isSupabaseConfigured } from '../src/supabaseClient';
 import { 
   Cpu, Shield, Zap, Info, Building2, Target, Wand2, ListChecks, 
   Mail, Phone, ArrowRight, ExternalLink, FileText, Scale, BookOpen,
@@ -79,6 +79,9 @@ const InfoView: React.FC<InfoViewProps> = ({ currentUser, getGreeting }) => {
   const [teamError, setTeamError] = useState(false);
 
   useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      return;
+    }
     let alive = true;
     const sectors = [
       { name: 'SETOR DE CLASSIFICAÇÃO DE BARRAGENS', icon: <ListChecks className="text-emerald-500" size={20} /> },

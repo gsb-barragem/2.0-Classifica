@@ -5,6 +5,16 @@ import { renderToString } from 'react-dom/server';
 import { ShieldCheck, FileText, ClipboardList, Layers, X } from 'lucide-react';
 import { ParecerData, OficioData, NoObligatoryData, RejectionData } from '../types';
 
+export function escapeHtml(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 export const parseGMS = (gms: string): number => {
   if (!gms) return NaN;
   // Format: 00°00'00,00"
@@ -395,15 +405,15 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
           tooltipContent = `
             <div class="p-2 min-w-[200px] font-sans">
               <div class="border-b border-slate-200 pb-1 mb-1">
-                <div class="text-[10px] font-bold uppercase" style="color: ${statusColor}">Parecer Técnico (${p.status})</div>
-                <div class="text-[10px] font-bold text-slate-500 uppercase">Processo: ${p.protocolo}</div>
-                <div class="text-sm font-black text-slate-900">${p.razaoSocial}</div>
+                <div class="text-[10px] font-bold uppercase" style="color: ${statusColor}">Parecer Técnico (${escapeHtml(p.status)})</div>
+                <div class="text-[10px] font-bold text-slate-500 uppercase">Processo: ${escapeHtml(p.protocolo)}</div>
+                <div class="text-sm font-black text-slate-900">${escapeHtml(p.razaoSocial)}</div>
               </div>
               <div class="space-y-1 text-xs">
-                <div><span class="font-bold text-slate-500">Data:</span> ${new Date(p.data).toLocaleDateString('pt-BR')}</div>
-                <div><span class="font-bold text-slate-500">Analista:</span> ${p.analista === 'OUTRO' ? p.analistaOutro : p.analista}</div>
-                <div><span class="font-bold text-slate-500">Município:</span> ${p.municipio}</div>
-                <div><span class="font-bold text-slate-500">Classificação:</span> ${p.classificacao.resumo}</div>
+                <div><span class="font-bold text-slate-500">Data:</span> ${escapeHtml(new Date(p.data).toLocaleDateString('pt-BR'))}</div>
+                <div><span class="font-bold text-slate-500">Analista:</span> ${escapeHtml(p.analista === 'OUTRO' ? p.analistaOutro : p.analista)}</div>
+                <div><span class="font-bold text-slate-500">Município:</span> ${escapeHtml(p.municipio)}</div>
+                <div><span class="font-bold text-slate-500">Classificação:</span> ${escapeHtml(p.classificacao.resumo)}</div>
               </div>
             </div>
           `;
@@ -437,13 +447,13 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
           tooltipContent = `
             <div class="p-2 min-w-[200px] font-sans">
               <div class="border-b border-slate-200 pb-1 mb-1">
-                <div class="text-[10px] font-bold uppercase" style="color: #10b981">Não Obrigatoriedade (${n.status})</div>
-                <div class="text-[10px] font-bold text-slate-500 uppercase">Processo: ${n.processo}</div>
-                <div class="text-sm font-black text-slate-900">${n.empreendedor}</div>
+                <div class="text-[10px] font-bold uppercase" style="color: #10b981">Não Obrigatoriedade (${escapeHtml(n.status)})</div>
+                <div class="text-[10px] font-bold text-slate-500 uppercase">Processo: ${escapeHtml(n.processo)}</div>
+                <div class="text-sm font-black text-slate-900">${escapeHtml(n.empreendedor)}</div>
               </div>
               <div class="space-y-1 text-xs">
-                <div><span class="font-bold text-slate-500">Analista:</span> ${n.analista}</div>
-                <div><span class="font-bold text-slate-500">Município:</span> ${n.municipio}</div>
+                <div><span class="font-bold text-slate-500">Analista:</span> ${escapeHtml(n.analista)}</div>
+                <div><span class="font-bold text-slate-500">Município:</span> ${escapeHtml(n.municipio)}</div>
               </div>
             </div>
           `;
@@ -477,14 +487,14 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
           tooltipContent = `
             <div class="p-2 min-w-[200px] font-sans">
               <div class="border-b border-slate-200 pb-1 mb-1">
-                <div class="text-[10px] font-bold uppercase" style="color: #ef4444">Indeferimento (${r.status})</div>
-                <div class="text-[10px] font-bold text-slate-500 uppercase">Processo: ${r.protocolo}</div>
-                <div class="text-sm font-black text-slate-900">${r.empreendedor || r.nomeEmpreendedor}</div>
+                <div class="text-[10px] font-bold uppercase" style="color: #ef4444">Indeferimento (${escapeHtml(r.status)})</div>
+                <div class="text-[10px] font-bold text-slate-500 uppercase">Processo: ${escapeHtml(r.protocolo)}</div>
+                <div class="text-sm font-black text-slate-900">${escapeHtml(r.empreendedor || r.nomeEmpreendedor)}</div>
               </div>
               <div class="space-y-1 text-xs">
-                <div><span class="font-bold text-slate-500">Analista:</span> ${r.analista}</div>
-                <div><span class="font-bold text-slate-500">Município:</span> ${r.municipio || r.municipioEmpreendimento}</div>
-                <div><span class="font-bold text-slate-500">Situação:</span> ${r.sistemaSituacao || 'Indeferido por inércia'}</div>
+                <div><span class="font-bold text-slate-500">Analista:</span> ${escapeHtml(r.analista)}</div>
+                <div><span class="font-bold text-slate-500">Município:</span> ${escapeHtml(r.municipio || r.municipioEmpreendimento)}</div>
+                <div><span class="font-bold text-slate-500">Situação:</span> ${escapeHtml(r.sistemaSituacao || 'Indeferido por inércia')}</div>
               </div>
             </div>
           `;
@@ -518,14 +528,14 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
           tooltipContent = `
             <div class="p-2 min-w-[200px] font-sans">
               <div class="border-b border-slate-200 pb-1 mb-1">
-                <div class="text-[10px] font-bold uppercase" style="color: #4f46e5">Transferência Titularidade (${t.status})</div>
-                <div class="text-[10px] font-bold text-slate-500 uppercase">Processo: ${t.nProcesso}</div>
-                <div class="text-sm font-black text-slate-900">${t.novoProprietario}</div>
+                <div class="text-[10px] font-bold uppercase" style="color: #4f46e5">Transferência Titularidade (${escapeHtml(t.status)})</div>
+                <div class="text-[10px] font-bold text-slate-500 uppercase">Processo: ${escapeHtml(t.nProcesso)}</div>
+                <div class="text-sm font-black text-slate-900">${escapeHtml(t.novoProprietario)}</div>
               </div>
               <div class="space-y-1 text-xs">
-                <div><span class="font-bold text-slate-500">Analista:</span> ${t.analista}</div>
-                <div><span class="font-bold text-slate-500">Município:</span> ${t.municipio}</div>
-                <div><span class="font-bold text-slate-500">Fazenda:</span> ${t.nomeFazenda}</div>
+                <div><span class="font-bold text-slate-500">Analista:</span> ${escapeHtml(t.analista)}</div>
+                <div><span class="font-bold text-slate-500">Município:</span> ${escapeHtml(t.municipio)}</div>
+                <div><span class="font-bold text-slate-500">Fazenda:</span> ${escapeHtml(t.nomeFazenda)}</div>
               </div>
             </div>
           `;
@@ -569,7 +579,7 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
                 <div class="flex justify-between items-start">
                   <div>
                     <div class="text-[10px] font-bold text-amber-600 uppercase tracking-wider">Ofício de Pendências</div>
-                    <div class="text-[10px] font-bold text-slate-400 uppercase">Processo: ${o.protocolo}</div>
+                    <div class="text-[10px] font-bold text-slate-400 uppercase">Processo: ${escapeHtml(o.protocolo)}</div>
                   </div>
                   <span class="px-1.5 py-0.5 rounded text-[8px] font-black uppercase border ${
                     o.status === 'Rascunho' ? 'bg-amber-50 text-amber-600 border-amber-200' :
@@ -578,19 +588,19 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
                     (expirado && o.situacaoPendencia === 'Pendente') || o.situacaoPendencia === 'Não cumprido' ? 'bg-red-50 text-red-700 border-red-200' :
                     'bg-amber-50 text-amber-700 border-amber-200'
                   }">
-                    ${o.status === 'Rascunho' ? 'Rascunho' : (o.situacaoPendencia || 'Pendente')}
+                    ${escapeHtml(o.status === 'Rascunho' ? 'Rascunho' : (o.situacaoPendencia || 'Pendente'))}
                   </span>
                 </div>
-                <div class="text-sm font-black text-slate-900 mt-1">${o.interessado}</div>
+                <div class="text-sm font-black text-slate-900 mt-1">${escapeHtml(o.interessado)}</div>
               </div>
               <div class="space-y-1.5 text-xs py-1">
                 <div class="flex justify-between items-center">
                   <span class="font-bold text-slate-500 uppercase text-[9px]">Emissão:</span>
-                  <span class="font-medium text-slate-700">${dataEmissao.toLocaleDateString('pt-BR')}</span>
+                  <span class="font-medium text-slate-700">${escapeHtml(dataEmissao.toLocaleDateString('pt-BR'))}</span>
                 </div>
                 <div class="flex justify-between items-center p-1 rounded ${expirado && o.situacaoPendencia === 'Pendente' && o.status !== 'Rascunho' ? 'bg-red-50' : 'bg-emerald-50'}">
                   <span class="font-bold ${expirado && o.situacaoPendencia === 'Pendente' && o.status !== 'Rascunho' ? 'text-red-500' : 'text-emerald-600'} uppercase text-[9px]">Vencimento:</span>
-                  <span class="font-black ${expirado && o.situacaoPendencia === 'Pendente' && o.status !== 'Rascunho' ? 'text-red-600' : 'text-emerald-700'}">${dataExpiracao.toLocaleDateString('pt-BR')}</span>
+                  <span class="font-black ${expirado && o.situacaoPendencia === 'Pendente' && o.status !== 'Rascunho' ? 'text-red-600' : 'text-emerald-700'}">${escapeHtml(dataExpiracao.toLocaleDateString('pt-BR'))}</span>
                 </div>
               </div>
             </div>
@@ -642,7 +652,7 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
           <div class="p-2 min-w-[260px] font-sans">
             <div class="border-b border-slate-200 pb-1 mb-1">
               <div class="text-[10px] font-black text-indigo-600 uppercase tracking-wider">Múltiplos Documentos (${items.length})</div>
-              <div class="text-sm font-black text-slate-900 mt-1">${municipio}</div>
+              <div class="text-sm font-black text-slate-900 mt-1">${escapeHtml(municipio)}</div>
             </div>
             <div class="space-y-2 mt-2 max-h-[240px] overflow-y-auto pr-1">
               ${items.map(item => {
@@ -651,10 +661,10 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
                   return `
                     <div class="p-1.5 rounded bg-blue-50 border border-blue-100">
                       <div class="flex justify-between items-start">
-                        <div class="text-[8px] font-bold text-blue-700 uppercase">Parecer (${p.status})</div>
-                        <div class="text-[8px] text-slate-400">${new Date(p.data).toLocaleDateString('pt-BR')}</div>
+                        <div class="text-[8px] font-bold text-blue-700 uppercase">Parecer (${escapeHtml(p.status)})</div>
+                        <div class="text-[8px] text-slate-400">${escapeHtml(new Date(p.data).toLocaleDateString('pt-BR'))}</div>
                       </div>
-                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${p.razaoSocial}</div>
+                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${escapeHtml(p.razaoSocial)}</div>
                     </div>
                   `;
                 } else if (item.type === 'no-obligatory') {
@@ -662,9 +672,9 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
                   return `
                     <div class="p-1.5 rounded bg-emerald-50 border border-emerald-100">
                       <div class="flex justify-between items-start">
-                        <div class="text-[8px] font-bold text-emerald-700 uppercase">Não Obrigatoriedade (${n.status})</div>
+                        <div class="text-[8px] font-bold text-emerald-700 uppercase">Não Obrigatoriedade (${escapeHtml(n.status)})</div>
                       </div>
-                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${n.empreendedor}</div>
+                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${escapeHtml(n.empreendedor)}</div>
                     </div>
                   `;
                 } else if (item.type === 'rejection') {
@@ -672,9 +682,9 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
                   return `
                     <div class="p-1.5 rounded bg-red-50 border border-red-100">
                       <div class="flex justify-between items-start">
-                        <div class="text-[8px] font-bold text-red-700 uppercase">Indeferimento (${r.status})</div>
+                        <div class="text-[8px] font-bold text-red-700 uppercase">Indeferimento (${escapeHtml(r.status)})</div>
                       </div>
-                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${r.empreendedor || r.nomeEmpreendedor}</div>
+                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${escapeHtml(r.empreendedor || r.nomeEmpreendedor)}</div>
                     </div>
                   `;
                 } else if (item.type === 'transferencia' as any) {
@@ -682,9 +692,9 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
                   return `
                     <div class="p-1.5 rounded bg-indigo-50 border border-indigo-100">
                       <div class="flex justify-between items-start">
-                        <div class="text-[8px] font-bold text-indigo-700 uppercase">Transferência (${t.status})</div>
+                        <div class="text-[8px] font-bold text-indigo-700 uppercase">Transferência (${escapeHtml(t.status)})</div>
                       </div>
-                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${t.novoProprietario}</div>
+                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${escapeHtml(t.novoProprietario)}</div>
                     </div>
                   `;
                 } else if (item.type === 'oficio') {
@@ -692,10 +702,10 @@ const MTMap: React.FC<MTMapProps> = ({ pareceres, oficios, noObligatoriedades, i
                   return `
                     <div class="p-1.5 rounded bg-amber-50 border border-amber-100">
                       <div class="flex justify-between items-start">
-                        <div class="text-[8px] font-bold text-amber-700 uppercase">Ofício (${o.status === 'Rascunho' ? 'Rascunho' : (o.situacaoPendencia || 'Pendente')})</div>
-                        <div class="text-[8px] text-slate-400">${new Date(o.data).toLocaleDateString('pt-BR')}</div>
+                        <div class="text-[8px] font-bold text-amber-700 uppercase">Ofício (${escapeHtml(o.status === 'Rascunho' ? 'Rascunho' : (o.situacaoPendencia || 'Pendente'))})</div>
+                        <div class="text-[8px] text-slate-400">${escapeHtml(new Date(o.data).toLocaleDateString('pt-BR'))}</div>
                       </div>
-                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${o.interessado}</div>
+                      <div class="text-[10px] font-black text-slate-900 leading-tight mt-0.5">${escapeHtml(o.interessado)}</div>
                     </div>
                   `;
                 }

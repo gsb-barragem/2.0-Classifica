@@ -1,8 +1,9 @@
-import { supabase } from '../supabaseClient';
+import { supabase, isSupabaseConfigured } from '../supabaseClient';
 
 export type AuditAction = 'LOGIN_SUCCESS' | 'LOGIN_FAIL' | 'LOGOUT' | 'CREATE_OPINION' | 'EDIT_OPINION' | 'DELETE_OPINION' | 'DELETE_OFICIO' | 'DELETE_NOTIFICACAO' | 'USER_CREATED' | 'USER_DELETED' | 'USER_PROFILE_UPDATED' | 'ACCESS_REQUEST_APPROVED' | 'ACCESS_REQUEST_REJECTED' | 'PASSWORD_CHANGED' | 'DOWNLOAD_DOCUMENT';
 
 export async function logActivity(action: AuditAction, details: Record<string, unknown> = {}) {
+  if (!isSupabaseConfigured()) return;
   try {
     const { data: { user } } = await supabase.auth.getUser();
     const userEmail = user?.email || 'Sistema/Anônimo';

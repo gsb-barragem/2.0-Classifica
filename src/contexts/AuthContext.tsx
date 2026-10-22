@@ -14,17 +14,71 @@ export const AuthContext = createContext<AuthContextType>({
   currentUser: null, login: async () => ({ success: false }), logout: async () => {}, loading: true, refreshProfile: async () => {},
 });
 
-const getProfile = async (): Promise<User | null> => {
-  const { data, error } = await supabase.rpc('classifica_my_profile');
-  if (error) throw error;
-  const profile = Array.isArray(data) ? data[0] : data;
-  if (!profile || profile.active !== true) return null;
-  return {
-    id: profile.id, authUserId: profile.auth_user_id, username: profile.username || profile.email || '',
-    email: profile.email || '', name: profile.name, role: profile.role, setor: profile.setor || null,
-    matricula: profile.matricula || '', active: true, forcePasswordChange: profile.force_password_change === true,
-    forcePasswordChangeAt: profile.force_password_change_at || null,
-  };
+const getProfile = async (authUser: { id: string; email?: string }): Promise<User | null> => {
+  // 1. Tenta a função RPC oficial do Classifica 2.0 (se já instalada no banco)
+  try {
+    const { data, error } = await supabase.rpc('classifica_my_profile');
+    if (!error && data) {
+      const profile = Array.isArray(data) ? data[0] : data;
+      if (profile && profile.active === true) {
+        return {
+          id: profile.id,
+          authUserId: profile.auth_user_id || authUser.id,
+          username: profile.username || profile.email || authUser.email || '',
+          email: profile.email || authUser.email || '',
+          name: profile.name,
+          role: profile.role,
+          setor: profile.setor || null,
+          matricula: profile.matricula || '',
+          active: true,
+          forcePasswordChange: profile.force_password_change === true,
+          forcePasswordChangeAt: profile.force_password_change_at || null,
+        };
+      }
+      return null;
+    }
+  } catch (rpcErr) {
+    // RPC classifica_my_profile pode não estar presente antes da aplicação da migração
+  }
+
+  // 2. Fallback seguro: consulta public.users filtrando estritamente pelo auth.uid() do usuário autenticado
+  try {
+    let { data: profile, error } = await supabase
+      .from('users')
+      .select('id, auth_user_id, username, email, name, role, setor, matricula, active, force_password_change, force_password_change_at')
+      .eq('auth_user_id', authUser.id)
+      .maybeSingle();
+
+    if (!profile && error) {
+      const fallback = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', authUser.id)
+        .maybeSingle();
+      if (!fallback.error && fallback.data) {
+        profile = fallback.data;
+      }
+    }
+
+    if (!profile || profile.active !== true) return null;
+
+    return {
+      id: profile.id,
+      authUserId: profile.auth_user_id || authUser.id,
+      username: profile.username || profile.email || authUser.email || '',
+      email: profile.email || authUser.email || '',
+      name: profile.name || 'Usuário',
+      role: profile.role || 'Analista',
+      setor: profile.setor || null,
+      matricula: profile.matricula || '',
+      active: true,
+      forcePasswordChange: profile.force_password_change === true,
+      forcePasswordChangeAt: profile.force_password_change_at || null,
+    };
+  } catch (err) {
+    console.error('Falha ao carregar perfil do usuário:', err);
+    return null;
+  }
 };
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -40,7 +94,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const verifySessionProfile = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setCurrentUser(null); return null; }
-    const profile = await getProfile();
+    const profile = await getProfile(user);
     if (!profile) {
       setCurrentUser(null);
       await supabase.auth.signOut();
@@ -68,8 +122,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     void init();
     try {
       const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-        if (event === 'SIGNED_OUT') setCurrentUser(null);
-        if (event === 'SIGNED_IN' && session?.user) {
+        if (event === 'SIGNED_OUT') {
+          setCurrentUser(null);
+        } else if (event === 'PASSWORD_RECOVERY') {
+          if (session?.user) {
+            queueMicrotask(() => { void verifySessionProfile().catch(() => undefined); });
+          }
+        } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') && session?.user) {
           queueMicrotask(() => { void verifySessionProfile().catch(() => undefined); });
         }
       });
