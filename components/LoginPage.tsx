@@ -145,9 +145,9 @@ export const LoginPage: React.FC = () => {
               </div>
             )}
             <div>
-              <label className={labelClass} htmlFor="login-email">E-mail institucional</label>
+              <label className={labelClass} htmlFor="login-email">Usuário ou E-mail</label>
               <div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                <input id="login-email" type="email" required autoComplete="username" className={inputClass} placeholder="nome@instituicao.gov.br" value={email} onChange={e => setEmail(e.target.value)} />
+                <input id="login-email" type="text" required autoComplete="username" className={inputClass} placeholder="admin ou e-mail institucional" value={email} onChange={e => setEmail(e.target.value)} />
               </div>
             </div>
             <div>
