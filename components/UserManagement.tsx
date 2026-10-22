@@ -3,7 +3,8 @@ import { supabase } from '../src/supabaseClient';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { UserRole } from '../types';
 import { logActivity } from '../src/lib/auditService';
-import { Users, UserPlus, Edit2, Check, X, Loader2, Search, AlertCircle, Shield, ShieldAlert, ShieldCheck, Mail, BadgeCheck, Building2, Clock3, RefreshCw } from 'lucide-react';
+import { Users, UserPlus, Edit2, Check, X, Loader2, Search, AlertCircle, Shield, ShieldAlert, ShieldCheck, Mail, BadgeCheck, Building2, Clock3, RefreshCw, Trash2, UserX, UserCheck, RotateCcw } from 'lucide-react';
+import { toast } from 'sonner';
 
 type AccessRequest = { id: string; auth_user_id: string; name: string; email: string; matricula: string; setor: string; perfil?: string; status: 'pending' | 'approved' | 'rejected'; requested_at: string };
 type AppUser = { id: string; auth_user_id: string; username: string; email: string; name: string; matricula: string; setor: string; perfil?: string; role: UserRole; active: boolean; created_at?: string };
@@ -166,6 +167,50 @@ export const UserManagement: React.FC = () => {
     } finally { setBusy(false); }
   };
 
+  const handleResetPassword = async (u: AppUser) => {
+    if (!window.confirm(`Deseja resetar a senha de ${u.name}? O usuário será forçado a trocar a senha no próximo login. A senha padrão temporária é @12345.`)) return;
+    setBusy(true);
+    try {
+      const { error: rpcError } = await supabase.rpc('classifica_reset_user_password', { p_user_id: u.id });
+      if (rpcError) throw rpcError;
+      await logActivity('USER_PASSWORD_RESET', { userId: u.id });
+      toast.success('Senha resetada com sucesso! A senha padrão é @12345.');
+      await fetchAll();
+    } catch (e: any) {
+      console.error('Falha ao resetar senha:', e);
+      toast.error('Erro ao resetar senha.');
+    } finally { setBusy(false); }
+  };
+
+  const handleDeleteUser = async (u: AppUser) => {
+    if (!window.confirm(`ATENÇÃO: Deseja EXCLUIR permanentemente o usuário ${u.name}? Esta ação não pode ser desfeita.`)) return;
+    setBusy(true);
+    try {
+      const { error: rpcError } = await supabase.rpc('classifica_delete_user', { p_user_id: u.id });
+      if (rpcError) throw rpcError;
+      await logActivity('USER_DELETED', { userId: u.id, email: u.email });
+      toast.success('Usuário excluído permanentemente.');
+      await fetchAll();
+    } catch (e: any) {
+      console.error('Falha ao excluir usuário:', e);
+      toast.error('Erro ao excluir usuário. Verifique se ele possui registros vinculados.');
+    } finally { setBusy(false); }
+  };
+
+  const handleToggleActive = async (u: AppUser) => {
+    setBusy(true);
+    try {
+      const { error: rpcError } = await supabase.rpc('classifica_toggle_user_status', { p_user_id: u.id });
+      if (rpcError) throw rpcError;
+      await logActivity(u.active ? 'USER_INACTIVATED' : 'USER_ACTIVATED', { userId: u.id });
+      toast.success(u.active ? 'Usuário inativado.' : 'Usuário ativado.');
+      await fetchAll();
+    } catch (e: any) {
+      console.error('Falha ao alternar status:', e);
+      toast.error('Erro ao alterar status do usuário.');
+    } finally { setBusy(false); }
+  };
+
   const saveNewUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim() || !form.email.trim() || !form.matricula.trim() || !SECTORS.includes(form.setor) || !PERFILS.includes(form.perfil)) { 
@@ -213,7 +258,12 @@ export const UserManagement: React.FC = () => {
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"><div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3"><Search size={20} className="text-slate-400"/><input type="search" placeholder="Buscar por nome, e-mail ou matrícula..." className="bg-transparent border-none outline-none text-slate-700 w-full" value={search} onChange={e => setSearch(e.target.value)}/></div>
       {error && <div role="alert" className="m-4 p-3 bg-red-50 border border-red-100 text-red-700 text-sm rounded-lg flex items-start gap-2"><AlertCircle size={18} className="shrink-0"/>{error}</div>}
       <div className="overflow-x-auto"><table className="w-full text-left border-collapse min-w-[850px]"><thead><tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider font-bold"><th className="px-5 py-4 border-b border-slate-100">Pessoa</th><th className="px-5 py-4 border-b border-slate-100">Matrícula</th><th className="px-5 py-4 border-b border-slate-100">Setor / Perfil</th><th className="px-5 py-4 border-b border-slate-100">{tab === 'requests' ? 'Solicitado em / Situação' : 'Papel / Status'}</th><th className="px-5 py-4 border-b border-slate-100 text-right">Ações</th></tr></thead><tbody className="divide-y divide-slate-100">
-        {loading ? <tr><td colSpan={6} className="px-6 py-12 text-center"><Loader2 className="animate-spin text-emerald-500 mx-auto mb-2" size={32}/>Carregando...</td></tr> : tab === 'requests' ? filteredRequests.length === 0 ? <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-400">Nenhuma solicitação encontrada.</td></tr> : filteredRequests.map(r => <tr key={r.id} className="hover:bg-slate-50/50"><td className="px-5 py-4"><div className="font-bold text-slate-800">{r.name}</div><div className="text-xs text-slate-500 flex items-center gap-1 mt-1"><Mail size={12}/>{r.email}</div></td><td className="px-5 py-4 text-sm text-slate-600"><span className="inline-flex items-center gap-1"><BadgeCheck size={14}/>{r.matricula}</span></td><td className="px-5 py-4 text-xs text-slate-600"><div className="font-medium text-slate-800">{r.setor}</div><div className="text-slate-500 mt-0.5">{r.perfil || 'Perfil não informado'}</div></td><td className="px-5 py-4"><div className="text-xs text-slate-500 flex items-center gap-1"><Clock3 size={13}/>{new Date(r.requested_at).toLocaleString('pt-BR')}</div><span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${r.status === 'pending' ? 'bg-amber-100 text-amber-800' : r.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{r.status === 'pending' ? 'Pendente' : r.status === 'approved' ? 'Aprovada' : 'Recusada'}</span></td><td className="px-5 py-4 text-right">{r.status === 'pending' ? <div className="flex justify-end gap-2"><button onClick={() => beginRequestEdit(r)} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Editar dados antes de analisar"><Edit2 size={17}/></button><button onClick={() => void reviewRequest(r,'approved')} disabled={busy} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg inline-flex items-center gap-1 disabled:opacity-50"><Check size={15}/>Aprovar</button><button onClick={() => void reviewRequest(r,'rejected')} disabled={busy} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg inline-flex items-center gap-1 disabled:opacity-50"><X size={15}/>Recusar</button></div> : <span className="text-xs text-slate-400">Analisada</span>}</td></tr>) : filteredUsers.length === 0 ? <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-400">Nenhum usuário encontrado.</td></tr> : filteredUsers.map(u => <tr key={u.id} className="hover:bg-slate-50/50"><td className="px-5 py-4"><div className="font-bold text-slate-800">{u.name}</div><div className="text-xs text-slate-500 flex items-center gap-1 mt-1"><Mail size={12}/>{u.email || u.username}</div></td><td className="px-5 py-4 text-sm text-slate-600">{u.matricula || '—'}</td><td className="px-5 py-4 text-xs text-slate-600"><div className="font-medium text-slate-800">{u.setor || 'Não informado'}</div><div className="text-slate-500 mt-0.5">{u.perfil || '—'}</div></td><td className="px-5 py-4"><span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${u.role === 'Administrador' ? 'bg-purple-100 text-purple-700' : u.role === 'Analista' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}`}>{u.role === 'Administrador' ? <ShieldAlert size={12}/> : u.role === 'Analista' ? <ShieldCheck size={12}/> : <Shield size={12}/>} {u.role}</span><span className={`ml-2 inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${u.active ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{u.active ? 'Ativo' : 'Inativo'}</span></td><td className="px-5 py-4 text-right"><button onClick={() => beginUserEdit(u)} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Editar perfil"><Edit2 size={17}/></button></td></tr>)}
+        {loading ? <tr><td colSpan={6} className="px-6 py-12 text-center"><Loader2 className="animate-spin text-emerald-500 mx-auto mb-2" size={32}/>Carregando...</td></tr> : tab === 'requests' ? filteredRequests.length === 0 ? <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-400">Nenhuma solicitação encontrada.</td></tr> : filteredRequests.map(r => <tr key={r.id} className="hover:bg-slate-50/50"><td className="px-5 py-4"><div className="font-bold text-slate-800">{r.name}</div><div className="text-xs text-slate-500 flex items-center gap-1 mt-1"><Mail size={12}/>{r.email}</div></td><td className="px-5 py-4 text-sm text-slate-600"><span className="inline-flex items-center gap-1"><BadgeCheck size={14}/>{r.matricula}</span></td><td className="px-5 py-4 text-xs text-slate-600"><div className="font-medium text-slate-800">{r.setor}</div><div className="text-slate-500 mt-0.5">{r.perfil || 'Perfil não informado'}</div></td><td className="px-5 py-4"><div className="text-xs text-slate-500 flex items-center gap-1"><Clock3 size={13}/>{new Date(r.requested_at).toLocaleString('pt-BR')}</div><span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${r.status === 'pending' ? 'bg-amber-100 text-amber-800' : r.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{r.status === 'pending' ? 'Pendente' : r.status === 'approved' ? 'Aprovada' : 'Recusada'}</span></td><td className="px-5 py-4 text-right">{r.status === 'pending' ? <div className="flex justify-end gap-2"><button onClick={() => beginRequestEdit(r)} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Editar dados antes de analisar"><Edit2 size={17}/></button><button onClick={() => void reviewRequest(r,'approved')} disabled={busy} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg inline-flex items-center gap-1 disabled:opacity-50"><Check size={15}/>Aprovar</button><button onClick={() => void reviewRequest(r,'rejected')} disabled={busy} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg inline-flex items-center gap-1 disabled:opacity-50"><X size={15}/>Recusar</button></div> : <span className="text-xs text-slate-400">Analisada</span>}</td></tr>) : filteredUsers.length === 0 ? <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-400">Nenhum usuário encontrado.</td></tr> : filteredUsers.map(u => <tr key={u.id} className="hover:bg-slate-50/50"><td className="px-5 py-4"><div className="font-bold text-slate-800">{u.name}</div><div className="text-xs text-slate-500 flex items-center gap-1 mt-1"><Mail size={12}/>{u.email || u.username}</div></td><td className="px-5 py-4 text-sm text-slate-600">{u.matricula || '—'}</td><td className="px-5 py-4 text-xs text-slate-600"><div className="font-medium text-slate-800">{u.setor || 'Não informado'}</div><div className="text-slate-500 mt-0.5">{u.perfil || '—'}</div></td><td className="px-5 py-4"><span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${u.role === 'Administrador' ? 'bg-purple-100 text-purple-700' : u.role === 'Analista' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}`}>{u.role === 'Administrador' ? <ShieldAlert size={12}/> : u.role === 'Analista' ? <ShieldCheck size={12}/> : <Shield size={12}/>} {u.role}</span><span className={`ml-2 inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${u.active ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{u.active ? 'Ativo' : 'Inativo'}</span></td><td className="px-5 py-4 text-right"><div className="flex justify-end gap-1">
+          <button onClick={() => beginUserEdit(u)} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Editar perfil"><Edit2 size={16}/></button>
+          <button onClick={() => handleResetPassword(u)} className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg" title="Resetar senha para @12345"><RotateCcw size={16}/></button>
+          <button onClick={() => handleToggleActive(u)} className={`p-2 rounded-lg ${u.active ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50' : 'text-emerald-600 hover:bg-emerald-50'}`} title={u.active ? 'Inativar usuário' : 'Ativar usuário'}>{u.active ? <UserX size={16}/> : <UserCheck size={16}/>}</button>
+          <button onClick={() => handleDeleteUser(u)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Excluir permanentemente"><Trash2 size={16}/></button>
+        </div></td></tr>)}
       </tbody></table></div>
     </div>
 
