@@ -74,9 +74,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         `)
         .order('data_parecer', { ascending: false });
 
-      if (pError) throw pError;
-
-      const mappedPareceres: ParecerData[] = pData.map(p => {
+      if (pError) {
+        console.warn('Tabela pareceres ainda não disponível no Supabase:', pError.message || pError.code);
+        setPareceres([]);
+      } else if (pData) {
+        const mappedPareceres: ParecerData[] = pData.map(p => {
         // Map database fields to ParecerData interface
         const principalBar = p.parecer_barramentos?.find((b: any) => b.is_principal);
         const montanteBars = p.parecer_barramentos?.filter((b: any) => !b.is_principal) || [];
@@ -276,6 +278,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
 
       setPareceres(mappedPareceres);
+    }
 
       // Fetch Oficios
       const { data: oData, error: oError } = await supabase
@@ -283,19 +286,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (oError) throw oError;
+      if (oError) {
+        console.warn('Tabela oficios ainda não disponível no Supabase:', oError.message || oError.code);
+        setOficios([]);
+      } else if (oData) {
+        const mappedOficios: OficioData[] = oData.map(o => ({
+          ...o.data,
+          id: o.id,
+          userId: o.user_id,
+          status: (o.status || 'Rascunho') as 'Rascunho' | 'Concluído',
+          tipo_documento: 'Ofício de Pendências' as const,
+          municipio: o.data?.municipio || o.municipio || '',
+          created_at: o.created_at
+        }));
 
-      const mappedOficios: OficioData[] = oData.map(o => ({
-        ...o.data,
-        id: o.id,
-        userId: o.user_id,
-        status: (o.status || 'Rascunho') as 'Rascunho' | 'Concluído',
-        tipo_documento: 'Ofício de Pendências' as const,
-        municipio: o.data?.municipio || o.municipio || '',
-        created_at: o.created_at
-      }));
-
-      setOficios(mappedOficios);
+        setOficios(mappedOficios);
+      }
 
       // Fetch NoObligatoriedades
       const { data: nData, error: nError } = await supabase
@@ -303,26 +309,29 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (nError) throw nError;
+      if (nError) {
+        console.warn('Tabela nao_obrigatoriedades ainda não disponível no Supabase:', nError.message || nError.code);
+        setNoObligatoriedades([]);
+      } else if (nData) {
+        const mappedNoObligatoriedades: NoObligatoryData[] = nData.map(n => ({
+          ...n.data,
+          data: n.data,
+          id: n.id,
+          userId: n.user_id,
+          analista: n.analista,
+          processo: n.processo,
+          status: (n.status || 'Rascunho') as 'Rascunho' | 'Concluído',
+          tipo_documento: 'Não Obrigatoriedade' as const,
+          municipio: n.municipio,
+          lat: n.lat,
+          long: n.long,
+          empreendedor: n.empreendedor,
+          created_at: n.created_at,
+          updated_at: n.updated_at
+        }));
 
-      const mappedNoObligatoriedades: NoObligatoryData[] = nData.map(n => ({
-        ...n.data,
-        data: n.data,
-        id: n.id,
-        userId: n.user_id,
-        analista: n.analista,
-        processo: n.processo,
-        status: (n.status || 'Rascunho') as 'Rascunho' | 'Concluído',
-        tipo_documento: 'Não Obrigatoriedade' as const,
-        municipio: n.municipio,
-        lat: n.lat,
-        long: n.long,
-        empreendedor: n.empreendedor,
-        created_at: n.created_at,
-        updated_at: n.updated_at
-      }));
-
-      setNoObligatoriedades(mappedNoObligatoriedades);
+        setNoObligatoriedades(mappedNoObligatoriedades);
+      }
 
       // Fetch Indeferimentos
       const { data: indData, error: indError } = await supabase
@@ -453,7 +462,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
     } catch (err) {
-      console.error('Error fetching data:', err);
+      console.warn('Aviso ao carregar dados do Supabase:', err);
     } finally {
       setLoading(false);
     }
