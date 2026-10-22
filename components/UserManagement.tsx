@@ -193,7 +193,8 @@ export const UserManagement: React.FC = () => {
       await fetchAll();
     } catch (e: any) {
       console.error('Falha ao excluir usuário:', e);
-      toast.error('Erro ao excluir usuário. Verifique se ele possui registros vinculados.');
+      const msg = e?.message || e?.details || 'Verifique se ele possui registros vinculados (pareceres, ofícios, etc).';
+      toast.error(`Erro ao excluir usuário: ${msg}`);
     } finally { setBusy(false); }
   };
 
