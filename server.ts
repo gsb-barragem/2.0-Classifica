@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
 import { parseArgs } from 'node:util';
+import administraLeituraHandler from './api/administra-leitura.ts';
 
 dotenv.config();
 
@@ -49,6 +50,10 @@ async function startServer() {
       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     }
     next();
+  });
+
+  app.all('/api/administra-leitura', (req, res) => {
+    void administraLeituraHandler(req, res);
   });
 
   if (isProduction) {

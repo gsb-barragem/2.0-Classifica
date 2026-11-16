@@ -21,15 +21,15 @@ import {
 } from 'lucide-react';
 import { ProdutoEcossistemaResumo, SistemaOrigem } from '../types';
 import { DataContext } from '../src/contexts/DataContext';
-import { getEcosystemStatus, isAdministraConfigured } from '../src/lib/ecosystemClients';
+import { getEcosystemStatus } from '../src/lib/ecosystemClients';
 import {
   AdministraCanonicalTable,
   AdministraReadError,
   AdministraRecord,
+  AdministraRpcName,
   AdministraTableDiagnostic,
   BarragemWithRelations,
   checkAdministraCanonicalAccess,
-  clearAdministraSchemaCache,
   EmpreendedorWithRelations,
   fetchBarragensPage,
   fetchEmpreendedoresPage,
@@ -47,6 +47,13 @@ const TAB_TO_TABLE: Record<Exclude<HubTab, 'produtos'>, AdministraCanonicalTable
   barragens: 'barragens',
   rts: 'rts',
   vinculos: 'responsaveis_tecnicos_barragens',
+};
+
+const TAB_TO_RPC: Record<Exclude<HubTab, 'produtos'>, AdministraRpcName> = {
+  empreendedores: 'csb_ler_empreendedores',
+  barragens: 'csb_ler_barragens',
+  rts: 'csb_ler_rts',
+  vinculos: 'csb_ler_vinculos_rt_barragem',
 };
 
 const systemBadgeClass = (sistema: SistemaOrigem) => {
@@ -157,11 +164,14 @@ export const EcosystemHub: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [serverConfigured, setServerConfigured] = useState<boolean | null>(null);
   const [diagnostics, setDiagnostics] = useState<AdministraTableDiagnostic[]>([]);
+  const [diagnosticsError, setDiagnosticsError] = useState<AdministraReadError | null>(null);
   const [activeError, setActiveError] = useState<AdministraReadError | null>(null);
   const [relationErrors, setRelationErrors] = useState<AdministraReadError[]>([]);
 
-  const [totalCount, setTotalCount] = useState(0);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [empreendedores, setEmpreendedores] = useState<EmpreendedorWithRelations[]>([]);
   const [barragens, setBarragens] = useState<BarragemWithRelations[]>([]);
   const [rts, setRts] = useState<RtWithRelations[]>([]);
@@ -180,10 +190,16 @@ export const EcosystemHub: React.FC = () => {
     relations: [],
   });
 
-  const ecosystemStatus = useMemo(() => getEcosystemStatus(), []);
-  const administraReady = isAdministraConfigured();
+  const ecosystemStatus = useMemo(() => {
+    const base = getEcosystemStatus();
+    return base.map((sys) =>
+      sys.id === 'ADMINISTRA_BARRAGENS' && serverConfigured !== null
+        ? { ...sys, configured: serverConfigured }
+        : sys
+    );
+  }, [serverConfigured]);
 
-  // Debounce da busca para consultar o Administra no servidor
+  // Debounce da busca para consultar o Administra via endpoint server-side
   useEffect(() => {
     const timer = setTimeout(() => {
       setPage(1);
@@ -193,32 +209,20 @@ export const EcosystemHub: React.FC = () => {
   }, [searchInput]);
 
   const loadDiagnostics = useCallback(async () => {
-    if (!administraReady) {
-      setDiagnostics([]);
-      return;
-    }
     setDiagnosticsLoading(true);
+    setDiagnosticsError(null);
     try {
       const res = await checkAdministraCanonicalAccess();
+      setServerConfigured(res.configured);
       setDiagnostics(res.diagnostics);
+      setDiagnosticsError(res.error || null);
     } finally {
       setDiagnosticsLoading(false);
     }
-  }, [administraReady]);
+  }, []);
 
   const loadActiveTabData = useCallback(async () => {
     if (activeTab === 'produtos') {
-      setActiveError(null);
-      setRelationErrors([]);
-      return;
-    }
-
-    if (!administraReady) {
-      setEmpreendedores([]);
-      setBarragens([]);
-      setRts([]);
-      setVinculos([]);
-      setTotalCount(0);
       setActiveError(null);
       setRelationErrors([]);
       return;
@@ -231,33 +235,41 @@ export const EcosystemHub: React.FC = () => {
     try {
       if (activeTab === 'empreendedores') {
         const res = await fetchEmpreendedoresPage(page, pageSize, debouncedSearch);
+        setServerConfigured((prev) => (res.configured ? true : prev === null ? false : prev));
         setEmpreendedores(res.data);
         setTotalCount(res.total);
+        setHasMore(res.hasMore);
         setActiveError(res.error || null);
         setRelationErrors(res.relationErrors || []);
       } else if (activeTab === 'barragens') {
         const res = await fetchBarragensPage(page, pageSize, debouncedSearch);
+        setServerConfigured((prev) => (res.configured ? true : prev === null ? false : prev));
         setBarragens(res.data);
         setTotalCount(res.total);
+        setHasMore(res.hasMore);
         setActiveError(res.error || null);
         setRelationErrors(res.relationErrors || []);
       } else if (activeTab === 'rts') {
         const res = await fetchRtsPage(page, pageSize, debouncedSearch);
+        setServerConfigured((prev) => (res.configured ? true : prev === null ? false : prev));
         setRts(res.data);
         setTotalCount(res.total);
+        setHasMore(res.hasMore);
         setActiveError(res.error || null);
         setRelationErrors(res.relationErrors || []);
       } else if (activeTab === 'vinculos') {
         const res = await fetchRtBarragensPage(page, pageSize, debouncedSearch);
+        setServerConfigured((prev) => (res.configured ? true : prev === null ? false : prev));
         setVinculos(res.data);
         setTotalCount(res.total);
+        setHasMore(res.hasMore);
         setActiveError(res.error || null);
         setRelationErrors(res.relationErrors || []);
       }
     } finally {
       setLoading(false);
     }
-  }, [activeTab, administraReady, debouncedSearch, page, pageSize]);
+  }, [activeTab, debouncedSearch, page, pageSize]);
 
   useEffect(() => {
     void loadDiagnostics();
@@ -268,7 +280,6 @@ export const EcosystemHub: React.FC = () => {
   }, [loadActiveTabData]);
 
   const handleRefreshAll = () => {
-    clearAdministraSchemaCache();
     void loadDiagnostics();
     void loadActiveTabData();
   };
@@ -294,7 +305,16 @@ export const EcosystemHub: React.FC = () => {
     );
   }, [documents, searchInput]);
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const currentItemsCount = useMemo(() => {
+    if (activeTab === 'empreendedores') return empreendedores.length;
+    if (activeTab === 'barragens') return barragens.length;
+    if (activeTab === 'rts') return rts.length;
+    if (activeTab === 'vinculos') return vinculos.length;
+    return 0;
+  }, [activeTab, barragens.length, empreendedores.length, rts.length, vinculos.length]);
+
+  const totalPages = typeof totalCount === 'number' ? Math.max(1, Math.ceil(totalCount / pageSize)) : null;
+  const canGoNext = totalPages !== null ? page < totalPages : hasMore;
   const blockedTables = useMemo(
     () => diagnostics.filter((d) => !d.accessible && d.error?.isRlsOrPermission),
     [diagnostics]
@@ -304,12 +324,12 @@ export const EcosystemHub: React.FC = () => {
     const diag = diagnostics.find((d) => d.table === table);
     if (!diag) return '';
     if (diag.accessible && typeof diag.totalCount === 'number') return ` (${diag.totalCount})`;
-    if (diag.error?.isRlsOrPermission) return ' (RLS)';
+    if (!diag.accessible && diag.error?.isRlsOrPermission) return ' (Bloq.)';
     return '';
   };
 
-  const fromIdx = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
-  const toIdx = Math.min(totalCount, page * pageSize);
+  const fromIdx = currentItemsCount === 0 ? 0 : (page - 1) * pageSize + 1;
+  const toIdx = currentItemsCount === 0 ? 0 : (page - 1) * pageSize + currentItemsCount;
 
   return (
     <div className="p-6 md:p-10 max-w-[1600px] mx-auto w-full space-y-6 animate-fade-in">
@@ -358,30 +378,54 @@ export const EcosystemHub: React.FC = () => {
             <p className="text-xs text-slate-500 leading-relaxed">{sys.papel}</p>
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
               <Lock size={11} />
-              {sys.readOnlyFromClassifica ? 'Somente leitura (chave pública)' : 'Base local do Classifica CSB'}
+              {sys.id === 'ADMINISTRA_BARRAGENS'
+                ? 'Somente leitura via endpoint server-side'
+                : sys.readOnlyFromClassifica
+                ? 'Somente leitura'
+                : 'Base local do Classifica CSB'}
             </div>
           </div>
         ))}
       </div>
 
-      {/* Diagnóstico das 4 tabelas canônicas no Administra */}
-      {administraReady ? (
+      {/* Diagnóstico das 4 RPCs canônicas no Administra via /api/administra-leitura */}
+      {serverConfigured === false && diagnosticsError ? (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 flex items-start gap-4">
+          <Info className="text-amber-600 shrink-0 mt-0.5" size={20} />
+          <div className="text-sm text-amber-900 space-y-1">
+            <p className="font-bold">Leitura canônica server-side do Administra Barragens indisponível</p>
+            <p className="text-xs text-amber-800 leading-relaxed">{diagnosticsError.userMessage}</p>
+            <p className="text-xs text-amber-800 leading-relaxed">
+              No servidor (sem prefixo <code className="bg-amber-100 px-1 py-0.5 rounded font-mono">VITE_</code>), defina{' '}
+              <code className="bg-amber-100 px-1 py-0.5 rounded font-mono">ADMINISTRA_SUPABASE_URL</code>,{' '}
+              <code className="bg-amber-100 px-1 py-0.5 rounded font-mono">ADMINISTRA_SUPABASE_SERVICE_ROLE_KEY</code>,{' '}
+              <code className="bg-amber-100 px-1 py-0.5 rounded font-mono">SUPABASE_URL</code> e{' '}
+              <code className="bg-amber-100 px-1 py-0.5 rounded font-mono">SUPABASE_ANON_KEY</code>.
+            </p>
+          </div>
+        </div>
+      ) : (
         <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-700">
               <Database size={15} className="text-emerald-600" />
-              Status de Leitura Canônica — Administra Barragens
+              Status de Leitura Canônica (RPCs) — Administra Barragens
             </div>
             {diagnosticsLoading && (
               <span className="text-xs text-slate-400 flex items-center gap-1.5">
-                <Loader2 size={13} className="animate-spin" /> Verificando permissões...
+                <Loader2 size={13} className="animate-spin" /> Validando sessão e RPCs...
               </span>
             )}
           </div>
+          {diagnosticsError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-800">
+              {diagnosticsError.userMessage}
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {diagnostics.map((d) => (
               <div
-                key={d.table}
+                key={d.rpc}
                 className={`rounded-xl border p-3 text-xs ${
                   d.accessible
                     ? 'bg-emerald-50/50 border-emerald-200 text-emerald-900'
@@ -389,61 +433,49 @@ export const EcosystemHub: React.FC = () => {
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <code className="font-mono font-bold text-[11px]">public.{d.table}</code>
+                  <code className="font-mono font-bold text-[11px] truncate">{d.rpc}</code>
                   <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase shrink-0 ${
                       d.accessible ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
                     }`}
                   >
-                    {d.accessible ? `${d.totalCount ?? 0} reg.` : d.error?.code || 'Bloqueada'}
+                    {d.accessible
+                      ? typeof d.totalCount === 'number'
+                        ? `${d.totalCount} reg.`
+                        : d.hasRecords
+                        ? 'Ativa'
+                        : '0 reg.'
+                      : d.error?.code || 'Bloqueada'}
                   </span>
                 </div>
+                <div className="text-[10px] font-mono text-slate-500 mt-1">public.{d.table}</div>
                 {!d.accessible && d.error && (
-                  <p className="mt-1.5 text-[11px] text-red-700 leading-snug">
-                    {d.error.isRlsOrPermission
-                      ? `RLS / Permissão negada (${d.error.code || `HTTP ${d.error.status}`})`
-                      : d.error.message}
-                  </p>
+                  <p className="mt-1.5 text-[11px] text-red-700 leading-snug">{d.error.userMessage}</p>
                 )}
               </div>
             ))}
           </div>
         </div>
-      ) : (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 flex items-start gap-4">
-          <Info className="text-amber-600 shrink-0 mt-0.5" size={20} />
-          <div className="text-sm text-amber-900 space-y-1">
-            <p className="font-bold">Administra Barragens não configurado neste ambiente</p>
-            <p className="text-xs text-amber-800 leading-relaxed">
-              Defina <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono">VITE_ADMINISTRA_SUPABASE_URL</code> e{' '}
-              <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono">VITE_ADMINISTRA_SUPABASE_ANON_KEY</code> (ou{' '}
-              <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono">VITE_ADMINISTRA_SUPABASE_PUBLISHABLE_KEY</code>) no ambiente para habilitar a leitura.
-            </p>
-          </div>
-        </div>
       )}
 
-      {/* Alerta explícito quando RLS ou permissão bloqueia tabelas do Administra */}
-      {blockedTables.length > 0 && (
+      {/* Alerta explícito quando autenticação/permissão bloqueia RPCs do Administra */}
+      {blockedTables.length > 0 && !diagnosticsError && (
         <div className="bg-red-50 border border-red-200 rounded-2xl p-5 flex items-start gap-3">
           <ShieldAlert className="text-red-600 shrink-0 mt-0.5" size={22} />
           <div className="space-y-1.5 text-xs text-red-900">
             <p className="font-black text-sm">
-              Leitura bloqueada por RLS / permissões no Supabase do Administra Barragens
+              Leitura bloqueada nas RPCs canônicas do Administra Barragens
             </p>
             <p className="text-red-800">
-              A consulta somente leitura com a chave pública configurada recebeu recusa de permissão (<code className="font-mono bg-red-100 px-1 rounded">42501 / HTTP 401</code>) nas seguintes tabelas canônicas:
+              A chamada autenticada via endpoint server-side recebeu recusa de permissão/autenticação nas seguintes RPCs:
             </p>
             <ul className="list-disc pl-5 space-y-1 text-red-800">
               {blockedTables.map((b) => (
-                <li key={b.table}>
-                  <code className="font-mono font-bold">public.{b.table}</code> — {b.error?.message}
+                <li key={b.rpc}>
+                  <code className="font-mono font-bold">{b.rpc}</code> — {b.error?.userMessage}
                 </li>
               ))}
             </ul>
-            <p className="text-red-700 pt-1">
-              O Classifica não utiliza <code className="font-mono">service_role</code> no frontend e não contorna políticas RLS. Libere uma policy/grant de <code className="font-mono">SELECT</code> somente leitura no projeto Administra Barragens para o papel correspondente se desejar expor estes dados nesta consulta.
-            </p>
           </div>
         </div>
       )}
@@ -501,7 +533,7 @@ export const EcosystemHub: React.FC = () => {
             placeholder={
               activeTab === 'produtos'
                 ? 'Filtrar produtos locais do Classifica...'
-                : `Buscar no Administra (public.${TAB_TO_TABLE[activeTab]})...`
+                : `Buscar no Administra (${TAB_TO_RPC[activeTab]})...`
             }
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
@@ -563,7 +595,7 @@ export const EcosystemHub: React.FC = () => {
           <div className="py-16 text-center text-slate-500 space-y-3">
             <Loader2 className="animate-spin mx-auto text-emerald-600" size={32} />
             <p className="text-sm font-semibold">
-              Consultando <code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">public.{TAB_TO_TABLE[activeTab]}</code> no Administra Barragens...
+              Consultando <code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">{TAB_TO_RPC[activeTab]}</code> no Administra Barragens...
             </p>
           </div>
         ) : activeTab !== 'produtos' && activeError ? (
@@ -571,8 +603,8 @@ export const EcosystemHub: React.FC = () => {
             <ShieldAlert className="mx-auto text-red-500" size={36} />
             <h3 className="text-base font-black text-slate-900">
               {activeError.isRlsOrPermission
-                ? `Acesso bloqueado por RLS na tabela public.${activeError.table}`
-                : `Erro ao consultar public.${activeError.table}`}
+                ? `Acesso bloqueado ao consultar ${activeError.rpc || TAB_TO_RPC[activeTab]}`
+                : `Erro ao consultar ${activeError.rpc || TAB_TO_RPC[activeTab]}`}
             </h3>
             <p className="text-sm text-red-700 max-w-2xl mx-auto">{activeError.userMessage}</p>
             {(activeError.details || activeError.hint) && (
@@ -606,11 +638,11 @@ export const EcosystemHub: React.FC = () => {
                     {empreendedores.length === 0 ? (
                       <tr>
                         <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
-                          {!administraReady
-                            ? 'Configure o Supabase do Administra Barragens para consultar empreendedores.'
+                          {serverConfigured === false
+                            ? 'Configure as variáveis server-side do Administra Barragens para consultar empreendedores.'
                             : debouncedSearch
                             ? `Nenhum empreendedor encontrado no Administra para "${debouncedSearch}".`
-                            : 'Nenhum empreendedor retornado pela tabela public.empreendedores.'}
+                            : 'Nenhum empreendedor retornado pela RPC csb_ler_empreendedores.'}
                         </td>
                       </tr>
                     ) : (
@@ -691,11 +723,11 @@ export const EcosystemHub: React.FC = () => {
                     {barragens.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
-                          {!administraReady
-                            ? 'Configure o Supabase do Administra Barragens para consultar barragens.'
+                          {serverConfigured === false
+                            ? 'Configure as variáveis server-side do Administra Barragens para consultar barragens.'
                             : debouncedSearch
                             ? `Nenhuma barragem encontrada no Administra para "${debouncedSearch}".`
-                            : 'Nenhuma barragem retornada pela tabela public.barragens.'}
+                            : 'Nenhuma barragem retornada pela RPC csb_ler_barragens.'}
                         </td>
                       </tr>
                     ) : (
@@ -749,18 +781,21 @@ export const EcosystemHub: React.FC = () => {
                                   setDetailModal({
                                     open: true,
                                     title: getBarragemLabel(bar),
-                                    subtitle: 'Tabela canônica: public.barragens',
+                                    subtitle: 'RPC canônica: csb_ler_barragens',
                                     primaryRecord: bar,
                                     relations: [
                                       ...(item.empreendedor
-                                        ? [{ label: 'Empreendedor vinculado', records: [item.empreendedor] }]
+                                        ? [{ label: 'Empreendedor vinculado (csb_ler_empreendedores)', records: [item.empreendedor] }]
                                         : []),
                                       {
                                         label: `Vínculos RT–Barragem (${item.vinculosRt.length})`,
-                                        records: item.vinculosRt.map((v) => ({
-                                          ...v.vinculo,
-                                          ...(v.rt ? { _rt_dados: v.rt } : {}),
-                                        })),
+                                        records: item.vinculosRt.map((v) => v.vinculo),
+                                      },
+                                      {
+                                        label: 'Responsáveis Técnicos vinculados (csb_ler_rts)',
+                                        records: item.vinculosRt
+                                          .map((v) => v.rt)
+                                          .filter((rt): rt is AdministraRecord => Boolean(rt)),
                                       },
                                     ],
                                   })
@@ -794,11 +829,11 @@ export const EcosystemHub: React.FC = () => {
                     {rts.length === 0 ? (
                       <tr>
                         <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
-                          {!administraReady
-                            ? 'Configure o Supabase do Administra Barragens para consultar RTs.'
+                          {serverConfigured === false
+                            ? 'Configure as variáveis server-side do Administra Barragens para consultar RTs.'
                             : debouncedSearch
                             ? `Nenhum RT encontrado no Administra para "${debouncedSearch}".`
-                            : 'Nenhum RT retornado pela tabela public.rts.'}
+                            : 'Nenhum RT retornado pela RPC csb_ler_rts.'}
                         </td>
                       </tr>
                     ) : (
@@ -842,15 +877,18 @@ export const EcosystemHub: React.FC = () => {
                                   setDetailModal({
                                     open: true,
                                     title: getRtLabel(rt),
-                                    subtitle: 'Tabela canônica: public.rts',
+                                    subtitle: 'RPC canônica: csb_ler_rts',
                                     primaryRecord: rt,
                                     relations: [
                                       {
-                                        label: `Barragens vinculadas (${item.vinculosBarragem.length})`,
-                                        records: item.vinculosBarragem.map((v) => ({
-                                          ...v.vinculo,
-                                          ...(v.barragem ? { _barragem_dados: v.barragem } : {}),
-                                        })),
+                                        label: `Vínculos RT–Barragem (${item.vinculosBarragem.length})`,
+                                        records: item.vinculosBarragem.map((v) => v.vinculo),
+                                      },
+                                      {
+                                        label: 'Barragens vinculadas (csb_ler_barragens)',
+                                        records: item.vinculosBarragem
+                                          .map((v) => v.barragem)
+                                          .filter((b): b is AdministraRecord => Boolean(b)),
                                       },
                                     ],
                                   })
@@ -885,11 +923,11 @@ export const EcosystemHub: React.FC = () => {
                     {vinculos.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
-                          {!administraReady
-                            ? 'Configure o Supabase do Administra Barragens para consultar vínculos RT–Barragem.'
+                          {serverConfigured === false
+                            ? 'Configure as variáveis server-side do Administra Barragens para consultar vínculos RT–Barragem.'
                             : debouncedSearch
                             ? `Nenhum vínculo RT–barragem encontrado no Administra para "${debouncedSearch}".`
-                            : 'Nenhum vínculo retornado pela tabela public.responsaveis_tecnicos_barragens.'}
+                            : 'Nenhum vínculo retornado pela RPC csb_ler_vinculos_rt_barragem.'}
                         </td>
                       </tr>
                     ) : (
@@ -945,13 +983,13 @@ export const EcosystemHub: React.FC = () => {
                                   setDetailModal({
                                     open: true,
                                     title: 'Vínculo RT–Barragem',
-                                    subtitle: 'Tabela canônica: public.responsaveis_tecnicos_barragens',
+                                    subtitle: 'RPC canônica: csb_ler_vinculos_rt_barragem',
                                     primaryRecord: item.vinculo,
                                     relations: [
-                                      ...(item.rt ? [{ label: 'Responsável Técnico (public.rts)', records: [item.rt] }] : []),
-                                      ...(item.barragem ? [{ label: 'Barragem (public.barragens)', records: [item.barragem] }] : []),
+                                      ...(item.rt ? [{ label: 'Responsável Técnico (csb_ler_rts)', records: [item.rt] }] : []),
+                                      ...(item.barragem ? [{ label: 'Barragem (csb_ler_barragens)', records: [item.barragem] }] : []),
                                       ...(item.empreendedor
-                                        ? [{ label: 'Empreendedor (public.empreendedores)', records: [item.empreendedor] }]
+                                        ? [{ label: 'Empreendedor (csb_ler_empreendedores)', records: [item.empreendedor] }]
                                         : []),
                                     ],
                                   })
@@ -1015,11 +1053,18 @@ export const EcosystemHub: React.FC = () => {
         )}
 
         {/* Rodapé de paginação para abas do Administra */}
-        {activeTab !== 'produtos' && administraReady && !activeError && (
+        {activeTab !== 'produtos' && serverConfigured !== false && !activeError && (
           <div className="px-5 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
             <div>
-              Mostrando <strong className="text-slate-900">{fromIdx}</strong>–<strong className="text-slate-900">{toIdx}</strong> de{' '}
-              <strong className="text-slate-900">{totalCount}</strong> registro(s)
+              Mostrando <strong className="text-slate-900">{fromIdx}</strong>–<strong className="text-slate-900">{toIdx}</strong>
+              {typeof totalCount === 'number' ? (
+                <>
+                  {' '}
+                  de <strong className="text-slate-900">{totalCount}</strong> registro(s)
+                </>
+              ) : (
+                ' registro(s)'
+              )}
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -1031,12 +1076,13 @@ export const EcosystemHub: React.FC = () => {
                 <ChevronLeft size={14} /> Anterior
               </button>
               <span className="px-2 font-bold text-slate-700">
-                Página {page} de {totalPages}
+                Página {page}
+                {totalPages !== null ? ` de ${totalPages}` : ''}
               </span>
               <button
                 type="button"
-                disabled={loading || page >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={loading || !canGoNext}
+                onClick={() => setPage((p) => (totalPages !== null ? Math.min(totalPages, p + 1) : p + 1))}
                 className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1"
               >
                 Próxima <ChevronRight size={14} />
