@@ -556,12 +556,26 @@ async function callJsonRpc(
   return { total: parsed.total, dados: parsed.dados };
 }
 
+function extractRowKey(row: Record<string, any> | null | undefined, keys: string[]): string {
+  if (!row || typeof row !== 'object') return '';
+  for (const k of keys) {
+    const val = row[k];
+    if (val !== null && val !== undefined && String(val).trim() !== '') {
+      return String(val);
+    }
+  }
+  return '';
+}
+
 async function readAllRowsViaRpc(
   client: SupabaseClient,
   rpc: 'csb_ler_empreendedores' | 'csb_ler_barragens',
   targetIds?: Set<string>,
   maxRows = 1000
 ) {
+  const idKeys = rpc === 'csb_ler_empreendedores'
+    ? ['id', 'empreendedor_id', 'id_empreendedor']
+    : ['id', 'barragem_id', 'id_barragem'];
   const batchSize = 200;
   const collected: Record<string, any>[] = [];
   const foundIds = new Set<string>();
@@ -573,9 +587,8 @@ async function readAllRowsViaRpc(
     collected.push(...res.rows);
     if (targetIds) {
       for (const row of res.rows) {
-        if (row?.id !== undefined && row?.id !== null) {
-          foundIds.add(String(row.id));
-        }
+        const key = extractRowKey(row, idKeys);
+        if (key) foundIds.add(key);
       }
       if (Array.from(targetIds).every((id) => foundIds.has(id))) {
         break;
@@ -594,6 +607,7 @@ async function readAllJsonViaRpc(
   targetIds?: Set<string>,
   maxRows = 1000
 ) {
+  const idKeys = rpc === 'csb_ler_rts' ? ['id', 'rt_id', 'id_rt'] : ['id', 'vinculo_id'];
   const batchSize = 200;
   const collected: Record<string, any>[] = [];
   const foundIds = new Set<string>();
@@ -608,9 +622,8 @@ async function readAllJsonViaRpc(
 
     if (targetIds) {
       for (const row of res.dados) {
-        if (row?.id !== undefined && row?.id !== null) {
-          foundIds.add(String(row.id));
-        }
+        const key = extractRowKey(row, idKeys);
+        if (key) foundIds.add(key);
       }
       if (Array.from(targetIds).every((id) => foundIds.has(id))) {
         break;
@@ -623,11 +636,15 @@ async function readAllJsonViaRpc(
   return { total, rows: collected };
 }
 
-function indexById(rows: Record<string, any>[], wantedIds?: Set<string>): Record<string, Record<string, any>> {
+function indexById(
+  rows: Record<string, any>[],
+  wantedIds?: Set<string>,
+  idKeys: string[] = ['id']
+): Record<string, Record<string, any>> {
   const map: Record<string, Record<string, any>> = {};
   for (const row of rows) {
-    if (!row || row.id === null || row.id === undefined) continue;
-    const id = String(row.id);
+    const id = extractRowKey(row, idKeys);
+    if (!id) continue;
     if (!wantedIds || wantedIds.has(id)) {
       map[id] = row;
     }
@@ -783,7 +800,9 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
 
     const hasMore = primary.rows.length > pageSize;
     const items = primary.rows.slice(0, pageSize);
-    const empIds = new Set(items.map((r) => r?.id).filter((v) => v !== null && v !== undefined).map(String));
+    const empIds = new Set(
+      items.map((r) => extractRowKey(r, ['id', 'empreendedor_id', 'id_empreendedor'])).filter(Boolean)
+    );
 
     const relationErrors = [];
     const barragensByEmpreendedorId: Record<string, Record<string, any>[]> = {};
@@ -842,7 +861,9 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
 
     const hasMore = primary.rows.length > pageSize;
     const items = primary.rows.slice(0, pageSize);
-    const barIds = new Set(items.map((b) => b?.id).filter((v) => v !== null && v !== undefined).map(String));
+    const barIds = new Set(
+      items.map((b) => extractRowKey(b, ['id', 'barragem_id', 'id_barragem'])).filter(Boolean)
+    );
     const wantedEmpIds = new Set(
       items.map((b) => b?.empreendedor_id).filter((v) => v !== null && v !== undefined).map(String)
     );
@@ -864,7 +885,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
     if (empAll.error) {
       relationErrors.push(empAll.error);
     } else {
-      empreendedoresById = indexById(empAll.rows, wantedEmpIds);
+      empreendedoresById = indexById(empAll.rows, wantedEmpIds, ['id', 'empreendedor_id', 'id_empreendedor']);
     }
 
     if (vincAll.error) {
@@ -888,7 +909,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
         if (rtsAll.error) {
           relationErrors.push(rtsAll.error);
         } else {
-          rtsById = indexById(rtsAll.rows, wantedRtIds);
+          rtsById = indexById(rtsAll.rows, wantedRtIds, ['id', 'rt_id', 'id_rt']);
         }
       }
     }
@@ -935,7 +956,9 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
 
     const items = primary.dados;
     const hasMore = offset + items.length < primary.total;
-    const rtIds = new Set(items.map((r) => r?.id).filter((v) => v !== null && v !== undefined).map(String));
+    const rtIds = new Set(
+      items.map((r) => extractRowKey(r, ['id', 'rt_id', 'id_rt'])).filter(Boolean)
+    );
 
     const relationErrors = [];
     const vinculosByRtId: Record<string, Record<string, any>[]> = {};
@@ -964,7 +987,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
           if (barAll.error) {
             relationErrors.push(barAll.error);
           } else {
-            barragensById = indexById(barAll.rows, wantedBarIds);
+            barragensById = indexById(barAll.rows, wantedBarIds, ['id', 'barragem_id', 'id_barragem']);
           }
         }
       }
@@ -1026,13 +1049,13 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
   if (rtsAll.error) {
     relationErrors.push(rtsAll.error);
   } else {
-    rtsById = indexById(rtsAll.rows, wantedRtIds);
+    rtsById = indexById(rtsAll.rows, wantedRtIds, ['id', 'rt_id', 'id_rt']);
   }
 
   if (barsAll.error) {
     relationErrors.push(barsAll.error);
   } else {
-    barragensById = indexById(barsAll.rows, wantedBarIds);
+    barragensById = indexById(barsAll.rows, wantedBarIds, ['id', 'barragem_id', 'id_barragem']);
     const wantedEmpIds = new Set(
       Object.values(barragensById)
         .map((b) => b?.empreendedor_id)
@@ -1044,7 +1067,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
       if (empAll.error) {
         relationErrors.push(empAll.error);
       } else {
-        empreendedoresById = indexById(empAll.rows, wantedEmpIds);
+        empreendedoresById = indexById(empAll.rows, wantedEmpIds, ['id', 'empreendedor_id', 'id_empreendedor']);
       }
     }
   }

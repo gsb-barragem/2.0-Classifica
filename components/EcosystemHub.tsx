@@ -19,8 +19,8 @@ import {
   UserCheck,
   X,
 } from 'lucide-react';
-import { ProdutoEcossistemaResumo, SistemaOrigem } from '../types';
-import { DataContext } from '../src/contexts/DataContext';
+import { ParecerData, ProdutoEcossistemaResumo, SistemaOrigem, TransferData } from '../types';
+import { AppDocument, DataContext } from '../src/contexts/DataContext';
 import { getEcosystemStatus } from '../src/lib/ecosystemClients';
 import {
   AdministraCanonicalTable,
@@ -35,6 +35,7 @@ import {
   fetchEmpreendedoresPage,
   fetchRtBarragensPage,
   fetchRtsPage,
+  getEcosystemProductsByEntity,
   mapLocalDocToEcosystemSummary,
   RtWithRelations,
   VinculoRtBarragemWithRelations,
@@ -94,14 +95,17 @@ function formatCellValue(val: any): string {
 function getEmpreendedorLabel(emp: AdministraRecord | null | undefined): string {
   return (
     pickField(emp, [
+      /^empreendedor_nome$/i,
       /^razao_social$/i,
       /^nome_razao$/i,
+      /^nome_razao_social$/i,
       /^nome$/i,
       /^nome_empreendedor$/i,
+      /^nome_completo$/i,
       /^nome_fantasia$/i,
       /^titulo$/i,
     ]) ||
-    pickField(emp, [/^id$/i]) ||
+    pickField(emp, [/^id$/i, /^empreendedor_id$/i, /^id_empreendedor$/i]) ||
     'Empreendedor sem nome'
   );
 }
@@ -112,16 +116,30 @@ function getEmpreendedorDoc(emp: AdministraRecord | null | undefined): string | 
 
 function getBarragemLabel(bar: AdministraRecord | null | undefined): string {
   return (
-    pickField(bar, [/^nome$/i, /^nome_barragem$/i, /^barragem$/i, /^denominacao$/i, /^titulo$/i]) ||
-    pickField(bar, [/^id$/i]) ||
+    pickField(bar, [
+      /^barragem_nome$/i,
+      /^nome_barragem$/i,
+      /^nome$/i,
+      /^barragem$/i,
+      /^denominacao$/i,
+      /^titulo$/i,
+    ]) ||
+    pickField(bar, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]) ||
     'Barragem sem nome'
   );
 }
 
 function getRtLabel(rt: AdministraRecord | null | undefined): string {
   return (
-    pickField(rt, [/^nome$/i, /^nome_completo$/i, /^nome_rt$/i, /^responsavel_tecnico$/i, /^razao_social$/i]) ||
-    pickField(rt, [/^id$/i]) ||
+    pickField(rt, [
+      /^rt_nome$/i,
+      /^nome_rt$/i,
+      /^nome$/i,
+      /^nome_completo$/i,
+      /^responsavel_tecnico$/i,
+      /^razao_social$/i,
+    ]) ||
+    pickField(rt, [/^id$/i, /^rt_id$/i, /^id_rt$/i]) ||
     'Responsável Técnico'
   );
 }
@@ -137,11 +155,18 @@ function getRtRegistro(rt: AdministraRecord | null | undefined): string | null {
   ]);
 }
 
-function getSummaryEntries(row: AdministraRecord | null | undefined, max = 4): Array<[string, string]> {
+function getSummaryEntries(
+  row: AdministraRecord | null | undefined,
+  max = 4,
+  excludePatterns: RegExp[] = []
+): Array<[string, string]> {
   if (!row || typeof row !== 'object') return [];
   const entries: Array<[string, string]> = [];
   for (const [k, v] of Object.entries(row)) {
     if (k === 'id' || k.endsWith('_id') || k.startsWith('id_') || k === 'created_at' || k === 'updated_at') {
+      continue;
+    }
+    if (excludePatterns.some((rx) => rx.test(k))) {
       continue;
     }
     if (v === null || v === undefined || String(v).trim() === '' || typeof v === 'object') {
@@ -151,6 +176,139 @@ function getSummaryEntries(row: AdministraRecord | null | undefined, max = 4): A
     if (entries.length >= max) break;
   }
   return entries;
+}
+
+function normalizeMatchText(value?: string | null): string {
+  return (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+interface DamClassificationInfo {
+  enquadramento: string | null;
+  categoria: string | null;
+  cri: string | null;
+  dpa: string | null;
+  portaria: string | null;
+  parecerNumero: string | null;
+  fonte: string | null;
+}
+
+function findLocalDocumentsForDam(bar: AdministraRecord, documents: AppDocument[]): AppDocument[] {
+  const barId = pickField(bar, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]);
+  const barSnisb = normalizeMatchText(pickField(bar, [/^snisb$/i, /^codigo_snisb$/i]));
+  const rawBarName = pickField(bar, [
+    /^barragem_nome$/i,
+    /^nome_barragem$/i,
+    /^nome$/i,
+    /^barragem$/i,
+    /^denominacao$/i,
+    /^titulo$/i,
+  ]);
+  const barNameNorm = normalizeMatchText(rawBarName);
+
+  return documents.filter((doc) => {
+    const anyDoc = doc as any;
+    const docBarId = anyDoc.barragemId ? String(anyDoc.barragemId) : '';
+    if (barId && docBarId && docBarId === barId) return true;
+
+    const docSnisb = normalizeMatchText(anyDoc.barragemPrincipal?.snisb || anyDoc.snisb);
+    if (barSnisb && docSnisb && docSnisb === barSnisb) return true;
+
+    if (barNameNorm.length >= 3) {
+      const candidates = [
+        anyDoc.barragemPrincipal?.nome,
+        anyDoc.nomeFazenda,
+        anyDoc.empreendimento,
+      ]
+        .map((c) => normalizeMatchText(c))
+        .filter(Boolean);
+      if (candidates.includes(barNameNorm)) return true;
+    }
+    return false;
+  });
+}
+
+function extractDamClassification(bar: AdministraRecord, localDocs: AppDocument[]): DamClassificationInfo {
+  const criRaw = pickField(bar, [/^cri_atual$/i, /^cri$/i, /^categoria_risco$/i]);
+  const dpaRaw = pickField(bar, [/^dpa_atual$/i, /^dpa$/i, /^dano_potencial$/i, /^dano_potencial_associado$/i]);
+  const categoriaRaw = pickField(bar, [
+    /^classe_enquadramento$/i,
+    /^enquadramento_classe$/i,
+    /^categoria$/i,
+    /^classe$/i,
+    /^classificacao$/i,
+  ]);
+
+  let enquadramento: string | null = null;
+  const rawEnq = bar?.enquadramento_pnsb ?? bar?.enquadrada_pnsb ?? bar?.enquadramento ?? bar?.enquadrada;
+  if (typeof rawEnq === 'boolean') {
+    enquadramento = rawEnq ? 'Enquadrada na PNSB' : 'Não enquadrada na PNSB';
+  } else if (rawEnq !== null && rawEnq !== undefined && String(rawEnq).trim() !== '') {
+    const str = String(rawEnq).trim();
+    if (/^(true|sim|s)$/i.test(str)) enquadramento = 'Enquadrada na PNSB';
+    else if (/^(false|nao|não|n)$/i.test(str)) enquadramento = 'Não enquadrada na PNSB';
+    else enquadramento = str;
+  }
+
+  let cri = criRaw;
+  let dpa = dpaRaw;
+  let categoria = categoriaRaw;
+  let portaria: string | null = null;
+  let parecerNumero: string | null = null;
+  let fonte: string | null = criRaw || dpaRaw || categoriaRaw || enquadramento ? 'Administra Barragens' : null;
+
+  const sortedDocs = [...localDocs].sort((a, b) => {
+    const tA = new Date((a as any).data || a.created_at || 0).getTime();
+    const tB = new Date((b as any).data || b.created_at || 0).getTime();
+    return tB - tA;
+  });
+
+  const parecerDoc = sortedDocs.find((d) => d.tipo_documento === 'Parecer Técnico') as ParecerData | undefined;
+  if (parecerDoc) {
+    cri = cri || parecerDoc.classificacao?.risco || null;
+    dpa = dpa || parecerDoc.classificacao?.dpaClass || null;
+    categoria = categoria || parecerDoc.classificacao?.resumo || null;
+    portaria = parecerDoc.portariaNumero || null;
+    parecerNumero = parecerDoc.parecerTecnicoNumero || parecerDoc.protocolo || null;
+
+    if (!enquadramento) {
+      const dpaUpper = String(parecerDoc.classificacao?.dpaClass || '').toUpperCase();
+      const altura = parseFloat(String(parecerDoc.barragemPrincipal?.alturaMaxima || '0').replace(',', '.')) || 0;
+      const volume = parseFloat(String(parecerDoc.barragemPrincipal?.volumeNMO || '0').replace(',', '.')) || 0;
+      const isPnsb = dpaUpper === 'MÉDIO' || dpaUpper === 'MEDIO' || dpaUpper === 'ALTO' || altura >= 15 || volume >= 3;
+      enquadramento = isPnsb ? 'Enquadrada na PNSB' : 'Não enquadrada na PNSB';
+    }
+    fonte = fonte ? `${fonte} + Classifica CSB` : 'Classifica CSB (Parecer Técnico)';
+  }
+
+  const transferDoc = sortedDocs.find((d) => d.tipo_documento === 'Transferência de Titularidade') as TransferData | undefined;
+  if (transferDoc) {
+    cri = cri || transferDoc.cri || null;
+    dpa = dpa || transferDoc.dpa || null;
+    portaria = portaria || transferDoc.portariaNova || transferDoc.portariaNumero || null;
+    parecerNumero = parecerNumero || transferDoc.parecerTecnico || null;
+    fonte = fonte || 'Classifica CSB (Transferência)';
+  }
+
+  const noObligDoc = sortedDocs.find((d) => d.tipo_documento === 'Não Obrigatoriedade');
+  if (noObligDoc && !enquadramento) {
+    enquadramento = 'Não enquadrada na PNSB (Não Obrigatoriedade)';
+    fonte = fonte || 'Classifica CSB (Não Obrigatoriedade)';
+  }
+
+  return {
+    enquadramento,
+    categoria,
+    cri,
+    dpa,
+    portaria,
+    parecerNumero,
+    fonte,
+  };
 }
 
 export const EcosystemHub: React.FC = () => {
@@ -183,12 +341,104 @@ export const EcosystemHub: React.FC = () => {
     subtitle?: string;
     primaryRecord: AdministraRecord | null;
     relations: Array<{ label: string; records: AdministraRecord[] }>;
+    isDam?: boolean;
+    damClassification?: DamClassificationInfo | null;
+    damProducts?: ProdutoEcossistemaResumo[];
+    damProductsLoading?: boolean;
   }>({
     open: false,
     title: '',
     primaryRecord: null,
     relations: [],
   });
+
+  const openDamDetails = useCallback(
+    (
+      bar: AdministraRecord,
+      relations: Array<{ label: string; records: AdministraRecord[] }>
+    ) => {
+      const barId = pickField(bar, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]);
+      const barSnisb = pickField(bar, [/^snisb$/i, /^codigo_snisb$/i]);
+      const localDocs = findLocalDocumentsForDam(bar, documents);
+      const localSummaries = localDocs.map(mapLocalDocToEcosystemSummary);
+      const classification = extractDamClassification(bar, localDocs);
+
+      const inlineDocs: ProdutoEcossistemaResumo[] = [];
+      const rawInline = Array.isArray(bar?.documentos)
+        ? bar.documentos
+        : Array.isArray(bar?.produtos)
+        ? bar.produtos
+        : [];
+      for (let i = 0; i < rawInline.length; i++) {
+        const d = rawInline[i];
+        if (!d || typeof d !== 'object') continue;
+        inlineDocs.push({
+          id: String(d.id || `inline_${i}`),
+          sistema_origem: (d.sistema_origem || 'ADMINISTRA_BARRAGENS') as SistemaOrigem,
+          produto_origem_id: String(d.produto_origem_id || d.id || `inline_${i}`),
+          tipo_produto: String(d.tipo_produto || d.tipo || d.tipo_documento || 'Documento'),
+          numero_documento: d.numero_documento || d.protocolo || d.numero || null,
+          status: d.status || null,
+          data_documento: d.data_documento || d.data || d.created_at || null,
+          analista_nome: d.analista_nome || d.analista || null,
+          barragem_id: barId || null,
+          barragem_nome: getBarragemLabel(bar),
+        });
+      }
+
+      const mergeProducts = (base: ProdutoEcossistemaResumo[], incoming: ProdutoEcossistemaResumo[]) => {
+        const map = new Map<string, ProdutoEcossistemaResumo>();
+        for (const item of [...base, ...incoming]) {
+          const key = `${item.sistema_origem}:${item.produto_origem_id || item.numero_documento || item.id}`;
+          if (!map.has(key)) map.set(key, item);
+        }
+        return Array.from(map.values()).sort((a, b) => {
+          const tA = new Date(a.data_documento || a.created_at || 0).getTime();
+          const tB = new Date(b.data_documento || b.created_at || 0).getTime();
+          return tB - tA;
+        });
+      };
+
+      const initialProducts = mergeProducts(localSummaries, inlineDocs);
+
+      setDetailModal({
+        open: true,
+        title: getBarragemLabel(bar),
+        subtitle: 'RPC canônica: csb_ler_barragens',
+        primaryRecord: bar,
+        relations,
+        isDam: true,
+        damClassification: classification,
+        damProducts: initialProducts,
+        damProductsLoading: Boolean(barId || barSnisb),
+      });
+
+      if (barId || barSnisb) {
+        void getEcosystemProductsByEntity({
+          barragemId: barId || null,
+          snisb: barSnisb || null,
+          localDocuments: [],
+        })
+          .then(({ products }) => {
+            setDetailModal((prev) => {
+              if (!prev.open || prev.primaryRecord !== bar) return prev;
+              return {
+                ...prev,
+                damProducts: mergeProducts(initialProducts, products),
+                damProductsLoading: false,
+              };
+            });
+          })
+          .catch(() => {
+            setDetailModal((prev) => {
+              if (!prev.open || prev.primaryRecord !== bar) return prev;
+              return { ...prev, damProductsLoading: false };
+            });
+          });
+      }
+    },
+    [documents]
+  );
 
   const ecosystemStatus = useMemo(() => {
     const base = getEcosystemStatus();
@@ -648,13 +898,26 @@ export const EcosystemHub: React.FC = () => {
                     ) : (
                       empreendedores.map((item, idx) => {
                         const emp = item.record;
+                        const empId = pickField(emp, [/^id$/i, /^empreendedor_id$/i, /^id_empreendedor$/i]);
                         const doc = getEmpreendedorDoc(emp);
-                        const summary = getSummaryEntries(emp, 3);
+                        const summary = getSummaryEntries(emp, 4, [
+                          /^empreendedor_nome$/i,
+                          /^razao_social$/i,
+                          /^nome_razao$/i,
+                          /^nome_razao_social$/i,
+                          /^nome$/i,
+                          /^nome_empreendedor$/i,
+                          /^cpf_cnpj$/i,
+                          /^cnpj_cpf$/i,
+                          /^documento$/i,
+                          /^cnpj$/i,
+                          /^cpf$/i,
+                        ]);
                         return (
-                          <tr key={String(emp.id ?? idx)} className="hover:bg-slate-50/70 align-top">
+                          <tr key={empId || String(idx)} className="hover:bg-slate-50/70 align-top">
                             <td className="px-5 py-4">
                               <div className="font-bold text-slate-800">{getEmpreendedorLabel(emp)}</div>
-                              {emp.id && <div className="text-[11px] font-mono text-slate-400 mt-0.5">{String(emp.id)}</div>}
+                              {empId && <div className="text-[11px] font-mono text-slate-400 mt-0.5">{empId}</div>}
                             </td>
                             <td className="px-5 py-4 text-xs text-slate-600 space-y-1">
                               {doc && <div className="font-mono font-bold text-slate-800">{doc}</div>}
@@ -670,12 +933,18 @@ export const EcosystemHub: React.FC = () => {
                               ) : (
                                 <div className="flex flex-wrap gap-1.5">
                                   {item.barragens.map((bar, bIdx) => (
-                                    <span
-                                      key={String(bar.id ?? bIdx)}
-                                      className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold"
+                                    <button
+                                      type="button"
+                                      key={pickField(bar, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]) || String(bIdx)}
+                                      onClick={() =>
+                                        openDamDetails(bar, [
+                                          { label: 'Empreendedor vinculado (csb_ler_empreendedores)', records: [emp] },
+                                        ])
+                                      }
+                                      className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold text-left transition-colors"
                                     >
                                       {getBarragemLabel(bar)}
-                                    </span>
+                                    </button>
                                   ))}
                                 </div>
                               )}
@@ -686,7 +955,7 @@ export const EcosystemHub: React.FC = () => {
                                   setDetailModal({
                                     open: true,
                                     title: getEmpreendedorLabel(emp),
-                                    subtitle: 'Tabela canônica: public.empreendedores',
+                                    subtitle: 'RPC canônica: csb_ler_empreendedores',
                                     primaryRecord: emp,
                                     relations: [
                                       { label: `Barragens vinculadas (${item.barragens.length})`, records: item.barragens },
@@ -733,12 +1002,13 @@ export const EcosystemHub: React.FC = () => {
                     ) : (
                       barragens.map((item, idx) => {
                         const bar = item.record;
+                        const barId = pickField(bar, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]);
                         const summary = getSummaryEntries(bar, 3);
                         return (
-                          <tr key={String(bar.id ?? idx)} className="hover:bg-slate-50/70 align-top">
+                          <tr key={barId || String(idx)} className="hover:bg-slate-50/70 align-top">
                             <td className="px-5 py-4">
                               <div className="font-bold text-slate-800">{getBarragemLabel(bar)}</div>
-                              {bar.id && <div className="text-[11px] font-mono text-slate-400 mt-0.5">{String(bar.id)}</div>}
+                              {barId && <div className="text-[11px] font-mono text-slate-400 mt-0.5">{barId}</div>}
                             </td>
                             <td className="px-5 py-4 text-xs text-slate-600 space-y-1">
                               {summary.map(([k, v]) => (
@@ -778,27 +1048,21 @@ export const EcosystemHub: React.FC = () => {
                             <td className="px-5 py-4 text-right">
                               <button
                                 onClick={() =>
-                                  setDetailModal({
-                                    open: true,
-                                    title: getBarragemLabel(bar),
-                                    subtitle: 'RPC canônica: csb_ler_barragens',
-                                    primaryRecord: bar,
-                                    relations: [
-                                      ...(item.empreendedor
-                                        ? [{ label: 'Empreendedor vinculado (csb_ler_empreendedores)', records: [item.empreendedor] }]
-                                        : []),
-                                      {
-                                        label: `Vínculos RT–Barragem (${item.vinculosRt.length})`,
-                                        records: item.vinculosRt.map((v) => v.vinculo),
-                                      },
-                                      {
-                                        label: 'Responsáveis Técnicos vinculados (csb_ler_rts)',
-                                        records: item.vinculosRt
-                                          .map((v) => v.rt)
-                                          .filter((rt): rt is AdministraRecord => Boolean(rt)),
-                                      },
-                                    ],
-                                  })
+                                  openDamDetails(bar, [
+                                    ...(item.empreendedor
+                                      ? [{ label: 'Empreendedor vinculado (csb_ler_empreendedores)', records: [item.empreendedor] }]
+                                      : []),
+                                    {
+                                      label: `Vínculos RT–Barragem (${item.vinculosRt.length})`,
+                                      records: item.vinculosRt.map((v) => v.vinculo),
+                                    },
+                                    {
+                                      label: 'Responsáveis Técnicos vinculados (csb_ler_rts)',
+                                      records: item.vinculosRt
+                                        .map((v) => v.rt)
+                                        .filter((rt): rt is AdministraRecord => Boolean(rt)),
+                                    },
+                                  ])
                                 }
                                 className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg inline-flex items-center gap-1"
                               >
@@ -839,13 +1103,14 @@ export const EcosystemHub: React.FC = () => {
                     ) : (
                       rts.map((item, idx) => {
                         const rt = item.record;
+                        const rtId = pickField(rt, [/^id$/i, /^rt_id$/i, /^id_rt$/i]);
                         const reg = getRtRegistro(rt);
                         const summary = getSummaryEntries(rt, 3);
                         return (
-                          <tr key={String(rt.id ?? idx)} className="hover:bg-slate-50/70 align-top">
+                          <tr key={rtId || String(idx)} className="hover:bg-slate-50/70 align-top">
                             <td className="px-5 py-4">
                               <div className="font-bold text-slate-800">{getRtLabel(rt)}</div>
-                              {rt.id && <div className="text-[11px] font-mono text-slate-400 mt-0.5">{String(rt.id)}</div>}
+                              {rtId && <div className="text-[11px] font-mono text-slate-400 mt-0.5">{rtId}</div>}
                             </td>
                             <td className="px-5 py-4 text-xs text-slate-600 space-y-1">
                               {reg && <div className="font-mono font-bold text-slate-800">{reg}</div>}
@@ -1108,6 +1373,132 @@ export const EcosystemHub: React.FC = () => {
                 <X size={20} />
               </button>
             </div>
+
+            {detailModal.isDam && (
+              <div className="space-y-4">
+                {/* Classificação e Enquadramento */}
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-black uppercase tracking-wider text-slate-700">
+                      Classificação e Enquadramento
+                    </p>
+                    {detailModal.damClassification?.fonte && (
+                      <span className="text-[10px] font-bold text-slate-500">
+                        Fonte: {detailModal.damClassification.fonte}
+                      </span>
+                    )}
+                  </div>
+                  {detailModal.damClassification &&
+                  (detailModal.damClassification.enquadramento ||
+                    detailModal.damClassification.categoria ||
+                    detailModal.damClassification.cri ||
+                    detailModal.damClassification.dpa ||
+                    detailModal.damClassification.portaria ||
+                    detailModal.damClassification.parecerNumero) ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                      <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                        <span className="block text-[10px] font-bold uppercase text-slate-400">Enquadramento PNSB</span>
+                        <span className="font-bold text-slate-800">
+                          {detailModal.damClassification.enquadramento || 'Não informado'}
+                        </span>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                        <span className="block text-[10px] font-bold uppercase text-slate-400">Categoria / Classe</span>
+                        <span className="font-bold text-slate-800">
+                          {detailModal.damClassification.categoria || '—'}
+                        </span>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                        <span className="block text-[10px] font-bold uppercase text-slate-400">CRI (Risco)</span>
+                        <span className="font-bold text-slate-800">
+                          {detailModal.damClassification.cri || '—'}
+                        </span>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                        <span className="block text-[10px] font-bold uppercase text-slate-400">DPA (Dano Potencial)</span>
+                        <span className="font-bold text-slate-800">
+                          {detailModal.damClassification.dpa || '—'}
+                        </span>
+                      </div>
+                      {(detailModal.damClassification.parecerNumero || detailModal.damClassification.portaria) && (
+                        <div className="sm:col-span-2 lg:col-span-4 bg-white border border-slate-200 rounded-lg p-2.5 flex flex-wrap gap-4">
+                          {detailModal.damClassification.parecerNumero && (
+                            <div>
+                              <span className="text-[10px] font-bold uppercase text-slate-400 mr-1.5">Parecer Técnico:</span>
+                              <span className="font-mono font-bold text-slate-800">{detailModal.damClassification.parecerNumero}</span>
+                            </div>
+                          )}
+                          {detailModal.damClassification.portaria && (
+                            <div>
+                              <span className="text-[10px] font-bold uppercase text-slate-400 mr-1.5">Portaria:</span>
+                              <span className="font-mono font-bold text-slate-800">{detailModal.damClassification.portaria}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">
+                      Sem classificação de enquadramento registrada para esta barragem.
+                    </p>
+                  )}
+                </div>
+
+                {/* Documentos vinculados à barragem */}
+                <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                      <FileText size={14} className="text-emerald-600" />
+                      Documentos sobre esta Barragem ({detailModal.damProducts?.length || 0})
+                    </p>
+                    {detailModal.damProductsLoading && (
+                      <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                        <Loader2 size={12} className="animate-spin" /> Buscando no ecossistema...
+                      </span>
+                    )}
+                  </div>
+                  {!detailModal.damProducts || detailModal.damProducts.length === 0 ? (
+                    <p className="text-xs text-slate-500">
+                      Nenhum documento localizado para esta barragem (parecer de classificação, ofício, notificação, etc.).
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {detailModal.damProducts.map((prod) => (
+                        <div
+                          key={prod.id}
+                          className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${systemBadgeClass(prod.sistema_origem)}`}>
+                                {prod.sistema_origem.replace(/_/g, ' ')}
+                              </span>
+                              <span className="font-bold text-slate-800">{prod.tipo_produto}</span>
+                              {prod.numero_documento && (
+                                <span className="font-mono text-[11px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-700">
+                                  {prod.numero_documento}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500 flex flex-wrap gap-3">
+                              {prod.analista_nome && <span>Analista: {prod.analista_nome}</span>}
+                              {prod.data_documento && (
+                                <span>Data: {new Date(prod.data_documento).toLocaleDateString('pt-BR')}</span>
+                              )}
+                            </div>
+                          </div>
+                          {prod.status && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white border border-slate-200 text-slate-700 self-start sm:self-center">
+                              {prod.status}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="space-y-2">
               <p className="text-xs font-black uppercase tracking-wider text-slate-500">Campos reais retornados</p>

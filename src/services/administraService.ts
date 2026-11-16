@@ -978,6 +978,17 @@ export async function checkAdministraCanonicalAccess(): Promise<{
   };
 }
 
+function pickRowKey(record: AdministraRecord | null | undefined, keys: string[]): string {
+  if (!record || typeof record !== 'object') return '';
+  for (const k of keys) {
+    const v = record[k];
+    if (v !== null && v !== undefined && String(v).trim() !== '') {
+      return String(v);
+    }
+  }
+  return '';
+}
+
 export async function fetchEmpreendedoresPage(
   page = 1,
   pageSize = 15,
@@ -1008,7 +1019,7 @@ export async function fetchEmpreendedoresPage(
   >;
 
   const data: EmpreendedorWithRelations[] = items.map((record) => {
-    const key = record?.id !== null && record?.id !== undefined ? String(record.id) : '';
+    const key = pickRowKey(record, ['id', 'empreendedor_id', 'id_empreendedor']);
     return {
       record,
       barragens: key ? barragensByEmp[key] || [] : [],
@@ -1061,11 +1072,8 @@ export async function fetchBarragensPage(
   const rtsById = (res.data?.relations?.rtsById || {}) as Record<string, AdministraRecord>;
 
   const data: BarragemWithRelations[] = items.map((record) => {
-    const barKey = record?.id !== null && record?.id !== undefined ? String(record.id) : '';
-    const empKey =
-      record?.empreendedor_id !== null && record?.empreendedor_id !== undefined
-        ? String(record.empreendedor_id)
-        : '';
+    const barKey = pickRowKey(record, ['id', 'barragem_id', 'id_barragem']);
+    const empKey = pickRowKey(record, ['empreendedor_id', 'id_empreendedor']);
     const rawVinculos = barKey ? vinculosByBarragemId[barKey] || [] : [];
 
     return {
@@ -1127,7 +1135,7 @@ export async function fetchRtsPage(
   >;
 
   const data: RtWithRelations[] = items.map((record) => {
-    const rtKey = record?.id !== null && record?.id !== undefined ? String(record.id) : '';
+    const rtKey = pickRowKey(record, ['id', 'rt_id', 'id_rt']);
     const rawVinculos = rtKey ? vinculosByRtId[rtKey] || [] : [];
 
     return {
