@@ -35,7 +35,27 @@ BEGIN
 END;
 $$;
 
--- 2. Garantir colunas padrão, vínculo automático auth.users <-> public.users e bloqueio RLS
+-- 2. Garantir existência de public.users, colunas padrão, importação de tabela legada (user/usuarios) e bloqueio RLS
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS public.users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  auth_user_id uuid,
+  email text,
+  username text,
+  name text,
+  role text NOT NULL DEFAULT 'Visualizador',
+  setor text,
+  perfil text,
+  matricula text,
+  active boolean DEFAULT false,
+  force_password_change boolean NOT NULL DEFAULT false,
+  force_password_change_at timestamptz,
+  password_hash text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS auth_user_id uuid;
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS email text;
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS username text;
@@ -49,9 +69,65 @@ ALTER TABLE public.users ADD COLUMN IF NOT EXISTS force_password_change boolean 
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS force_password_change_at timestamptz;
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 
--- Migração compatível de colunas legadas (nome, login, papel, status, situacao) e vínculo com auth.users
+CREATE UNIQUE INDEX IF NOT EXISTS users_auth_user_id_uidx ON public.users(auth_user_id) WHERE auth_user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_uidx ON public.users(lower(email)) WHERE email IS NOT NULL;
+
+-- Importa e sincroniza registros caso o banco legado use tabela "user", "usuarios" ou "perfis"
 DO $$
+DECLARE
+  src_table text;
+  rec jsonb;
+  v_email text;
+  v_name text;
+  v_username text;
+  v_role text;
+  v_setor text;
+  v_perfil text;
+  v_matricula text;
+  v_active boolean;
 BEGIN
+  FOREACH src_table IN ARRAY ARRAY['public."user"', 'public.usuarios', 'public.perfis'] LOOP
+    IF pg_catalog.to_regclass(src_table) IS NOT NULL THEN
+      FOR rec IN EXECUTE pg_catalog.format('SELECT to_jsonb(t) FROM %s t', src_table) LOOP
+        v_email := NULLIF(lower(trim(COALESCE(rec->>'email', ''))), '');
+        IF v_email IS NULL THEN
+          CONTINUE;
+        END IF;
+
+        v_name := COALESCE(NULLIF(trim(COALESCE(rec->>'name', rec->>'nome', rec->>'login', '')), ''), v_email);
+        v_username := COALESCE(NULLIF(trim(COALESCE(rec->>'username', rec->>'login', '')), ''), v_email);
+        v_setor := NULLIF(trim(COALESCE(rec->>'setor', '')), '');
+        v_perfil := NULLIF(trim(COALESCE(rec->>'perfil', '')), '');
+        v_matricula := NULLIF(trim(COALESCE(rec->>'matricula', '')), '');
+        v_role := CASE
+          WHEN lower(trim(COALESCE(rec->>'role', rec->>'papel', ''))) IN ('administrador','administradora','admin') THEN 'Administrador'
+          WHEN lower(trim(COALESCE(rec->>'role', rec->>'papel', ''))) = 'analista' THEN 'Analista'
+          ELSE 'Visualizador'
+        END;
+        v_active := CASE
+          WHEN rec ? 'active' AND rec->>'active' IN ('true','t','1') THEN true
+          WHEN rec ? 'active' AND rec->>'active' IN ('false','f','0') THEN false
+          WHEN lower(trim(COALESCE(rec->>'status', rec->>'situacao', ''))) IN ('ativo','ativa','active','aprovado','aprovada') THEN true
+          ELSE false
+        END;
+
+        IF EXISTS (SELECT 1 FROM public.users u WHERE u.email IS NOT NULL AND lower(trim(u.email)) = v_email) THEN
+          UPDATE public.users u SET
+            role = CASE WHEN COALESCE(u.role::text, '') = '' THEN v_role ELSE u.role END,
+            setor = COALESCE(NULLIF(u.setor, ''), v_setor),
+            name = COALESCE(NULLIF(u.name, ''), v_name),
+            username = COALESCE(NULLIF(u.username, ''), v_username),
+            active = COALESCE(u.active, v_active),
+            updated_at = now()
+          WHERE u.email IS NOT NULL AND lower(trim(u.email)) = v_email;
+        ELSE
+          INSERT INTO public.users (email, username, name, role, setor, perfil, matricula, active, force_password_change, updated_at)
+          VALUES (v_email, v_username, v_name, v_role, v_setor, v_perfil, v_matricula, v_active, false, now());
+        END IF;
+      END LOOP;
+    END IF;
+  END LOOP;
+
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'nome') THEN
     EXECUTE 'UPDATE public.users SET name = trim(nome) WHERE (name IS NULL OR trim(name) = '''') AND nome IS NOT NULL AND trim(nome) <> ''''';
   END IF;
@@ -148,6 +224,7 @@ $$;
 REVOKE ALL ON FUNCTION public.classifica_can_access_app() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.classifica_can_access_app() TO authenticated;
 
+DROP FUNCTION IF EXISTS public.classifica_my_profile();
 CREATE OR REPLACE FUNCTION public.classifica_my_profile()
 RETURNS TABLE(
   id uuid,

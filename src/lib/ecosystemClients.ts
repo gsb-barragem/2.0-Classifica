@@ -6,17 +6,41 @@ let administraClient: SupabaseClient | undefined;
 let notificaClient: SupabaseClient | undefined;
 let fiscalizaClient: SupabaseClient | undefined;
 
+function normalizeSupabaseOrigin(rawUrl?: string): string {
+  const clean = rawUrl?.trim();
+  if (!clean) return '';
+  try {
+    return new URL(clean).origin;
+  } catch {
+    return clean.replace(/\/+$/, '');
+  }
+}
+
+function isSecretSupabaseKey(key?: string): boolean {
+  const trimmed = key?.trim() || '';
+  if (!trimmed) return false;
+  if (trimmed.toLowerCase().startsWith('sb_secret_')) return true;
+  return isPrivilegedJwtKey(trimmed);
+}
+
+function getAdministraPublicKey(): string | undefined {
+  return (
+    import.meta.env.VITE_ADMINISTRA_SUPABASE_ANON_KEY ||
+    import.meta.env.VITE_ADMINISTRA_SUPABASE_PUBLISHABLE_KEY
+  );
+}
+
 function isEnvPairReady(url?: string, anonKey?: string): boolean {
-  const cleanUrl = url?.trim();
+  const cleanUrl = normalizeSupabaseOrigin(url);
   const cleanKey = anonKey?.trim();
   if (!cleanUrl || !cleanKey) return false;
-  return isValidSupabaseUrl(cleanUrl) && !isPrivilegedJwtKey(cleanKey);
+  return isValidSupabaseUrl(cleanUrl) && !isSecretSupabaseKey(cleanKey);
 }
 
 export function isAdministraConfigured(): boolean {
   return isEnvPairReady(
     import.meta.env.VITE_ADMINISTRA_SUPABASE_URL,
-    import.meta.env.VITE_ADMINISTRA_SUPABASE_ANON_KEY
+    getAdministraPublicKey()
   );
 }
 
@@ -37,9 +61,14 @@ export function isFiscalizaConfigured(): boolean {
 export function getAdministraClient(): SupabaseClient | null {
   if (!isAdministraConfigured()) return null;
   if (!administraClient) {
+    const rawUrl = normalizeSupabaseOrigin(import.meta.env.VITE_ADMINISTRA_SUPABASE_URL);
+    const rawKey = getAdministraPublicKey();
+    if (isSecretSupabaseKey(rawKey)) {
+      throw new Error('Violação de segurança bloqueada: chave secreta detectada em variável pública do Administra Barragens.');
+    }
     const { url, anonKey } = validatePublicSupabaseEnv(
-      import.meta.env.VITE_ADMINISTRA_SUPABASE_URL,
-      import.meta.env.VITE_ADMINISTRA_SUPABASE_ANON_KEY,
+      rawUrl,
+      rawKey,
       'Administra Barragens'
     );
     administraClient = createClient(url, anonKey, {
@@ -50,7 +79,7 @@ export function getAdministraClient(): SupabaseClient | null {
       },
       global: {
         headers: {
-          'X-Client-Info': 'classifica-to-administra',
+          'X-Client-Info': 'classifica-to-administra-readonly',
           'X-CSB-Sistema': 'CLASSIFICA_CSB',
         },
       },
@@ -63,7 +92,7 @@ export function getNotificaReadOnlyClient(): SupabaseClient | null {
   if (!isNotificaConfigured()) return null;
   if (!notificaClient) {
     const { url, anonKey } = validatePublicSupabaseEnv(
-      import.meta.env.VITE_NOTIFICA_SUPABASE_URL,
+      normalizeSupabaseOrigin(import.meta.env.VITE_NOTIFICA_SUPABASE_URL),
       import.meta.env.VITE_NOTIFICA_SUPABASE_ANON_KEY,
       'Notifica CSB'
     );
@@ -88,7 +117,7 @@ export function getFiscalizaReadOnlyClient(): SupabaseClient | null {
   if (!isFiscalizaConfigured()) return null;
   if (!fiscalizaClient) {
     const { url, anonKey } = validatePublicSupabaseEnv(
-      import.meta.env.VITE_FISCALIZA_SUPABASE_URL,
+      normalizeSupabaseOrigin(import.meta.env.VITE_FISCALIZA_SUPABASE_URL),
       import.meta.env.VITE_FISCALIZA_SUPABASE_ANON_KEY,
       'Fiscaliza Barragens'
     );
@@ -125,9 +154,9 @@ export function getEcosystemStatus(): EcosystemSystemStatus[] {
     {
       id: 'ADMINISTRA_BARRAGENS',
       nome: 'Administra Barragens',
-      papel: 'Base Central (Empreendedores, Barragens, RTs, Solicitações e Índice de Produtos)',
+      papel: 'Base Canônica Central (Empreendedores, Barragens, RTs e Vínculos RT–Barragem)',
       configured: isAdministraConfigured(),
-      readOnlyFromClassifica: false,
+      readOnlyFromClassifica: true,
     },
     {
       id: 'NOTIFICA_CSB',

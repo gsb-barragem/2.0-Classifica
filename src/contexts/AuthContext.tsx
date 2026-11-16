@@ -26,6 +26,9 @@ const SAFE_USER_COLUMNS =
 const LEGACY_SAFE_USER_COLUMNS =
   'id, nome, login, email, setor, papel, situacao, status';
 
+const MINIMAL_LEGACY_USER_COLUMNS =
+  'id, email, setor, papel, situacao, status';
+
 const normalizeRole = (role?: string | null): UserRole => {
   if (!role) return 'Visualizador';
   const lower = role.toLowerCase().trim();
@@ -46,8 +49,8 @@ const mapProfileRow = (profile: any, fallbackEmail?: string): User | null => {
   if (!profile || !isProfileActive(profile)) return null;
 
   return {
-    id: profile.id,
-    authUserId: profile.auth_user_id || profile.id,
+    id: String(profile.id),
+    authUserId: profile.auth_user_id ? String(profile.auth_user_id) : String(profile.id),
     username: profile.username || profile.login || profile.email || fallbackEmail || '',
     email: profile.email || fallbackEmail || '',
     name: profile.name || profile.nome || profile.login || profile.username || 'Usuário',
@@ -61,13 +64,14 @@ const mapProfileRow = (profile: any, fallbackEmail?: string): User | null => {
   };
 };
 
-const queryUserByColumns = async (
+const queryTableByColumns = async (
+  tableName: 'users' | 'user' | 'usuarios',
   columns: string,
   authUser: { id: string; email?: string }
 ): Promise<User | null> => {
   if (columns.includes('auth_user_id')) {
     const byAuthId = await supabase
-      .from('users')
+      .from(tableName)
       .select(columns)
       .eq('auth_user_id', authUser.id)
       .maybeSingle();
@@ -78,7 +82,7 @@ const queryUserByColumns = async (
   }
 
   const byId = await supabase
-    .from('users')
+    .from(tableName)
     .select(columns)
     .eq('id', authUser.id)
     .maybeSingle();
@@ -90,7 +94,7 @@ const queryUserByColumns = async (
   const verifiedEmail = authUser.email?.trim().toLowerCase();
   if (verifiedEmail) {
     const byEmail = await supabase
-      .from('users')
+      .from(tableName)
       .select(columns)
       .ilike('email', verifiedEmail)
       .maybeSingle();
@@ -116,18 +120,26 @@ const getProfile = async (authUser: { id: string; email?: string }): Promise<Use
     // Segue para fallback restrito caso a RPC ainda não esteja instalada
   }
 
-  // 2. Fallback restrito a colunas seguras (sem password_hash e sem auto-provisionamento)
+  // 2. Fallback restrito a colunas seguras (sem password_hash/senha e sem auto-provisionamento)
   try {
-    const standardMatch = await queryUserByColumns(SAFE_USER_COLUMNS, authUser);
-    if (standardMatch) return standardMatch;
+    const candidates: Array<{ table: 'users' | 'user' | 'usuarios'; columns: string }> = [
+      { table: 'users', columns: SAFE_USER_COLUMNS },
+      { table: 'users', columns: LEGACY_SAFE_USER_COLUMNS },
+      { table: 'user', columns: LEGACY_SAFE_USER_COLUMNS },
+      { table: 'user', columns: MINIMAL_LEGACY_USER_COLUMNS },
+      { table: 'usuarios', columns: LEGACY_SAFE_USER_COLUMNS },
+      { table: 'usuarios', columns: MINIMAL_LEGACY_USER_COLUMNS },
+    ];
 
-    const legacyMatch = await queryUserByColumns(LEGACY_SAFE_USER_COLUMNS, authUser);
-    if (legacyMatch) return legacyMatch;
+    for (const candidate of candidates) {
+      const match = await queryTableByColumns(candidate.table, candidate.columns, authUser);
+      if (match) return match;
+    }
   } catch {
     console.warn('Falha ao consultar perfil autorizado.');
   }
 
-  // Usuário autenticado no Auth, mas sem perfil ativo aprovado em public.users:
+  // Usuário autenticado no Auth, mas sem perfil ativo aprovado:
   // nunca auto-provisiona no cliente.
   return null;
 };
