@@ -32,6 +32,8 @@ import { DataContext } from '../src/contexts/DataContext';
 import { DocItem, RejectionData, RTRejectionEntry } from '../types';
 import { supabase } from '../src/supabaseClient';
 import { OPS_ANALISTA as ANALISTAS } from '../constants';
+import ConfirmModal from './ui/ConfirmModal';
+import { syncClassificaProductToAdministra } from '../src/services/administraService';
 
 interface RejectionFormProps {
   initialData?: RejectionData;
@@ -192,6 +194,20 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
     espolio: true,
     rt: true,
     docsTec: true
+  });
+
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    variant: 'warning',
+    onConfirm: () => {},
   });
 
   const [formData, setFormData] = useState<RejectionData>(() => {
@@ -465,28 +481,58 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
         docs_tecnicos: formData.docsTecnicos,
         responsaveis: formData.responsaveisTecnicos,
         status,
-        tipo_documento: formData.tipo_documento
+        tipo_documento: formData.tipo_documento,
+        empreendedor_id: formData.empreendedorId || null,
+        barragem_id: formData.barragemId || null,
+        sistema_origem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
       };
 
-      let queryResult;
-      if (formData.id) {
-        queryResult = await supabase
+      const runSave = async (body: Record<string, any>) => {
+        if (formData.id) {
+          return supabase
+            .from('indeferimentos')
+            .update({ ...body, updated_at: new Date().toISOString() })
+            .eq('id', formData.id)
+            .select();
+        }
+        return supabase
           .from('indeferimentos')
-          .update({ ...payload, updated_at: new Date().toISOString() })
-          .eq('id', formData.id)
+          .insert(body)
           .select();
-      } else {
-        queryResult = await supabase
-          .from('indeferimentos')
-          .insert(payload)
-          .select();
+      };
+
+      let queryResult = await runSave(payload);
+      if (queryResult.error?.code === '42703') {
+        const { empreendedor_id: _e, barragem_id: _b, sistema_origem: _s, ...legacyPayload } = payload;
+        queryResult = await runSave(legacyPayload);
       }
 
       if (queryResult.error) throw queryResult.error;
 
       const savedItem = queryResult.data?.[0];
+      const savedId = savedItem?.id || formData.id;
       if (savedItem?.id && !formData.id) {
         setFormData(prev => ({ ...prev, id: savedItem.id }));
+      }
+
+      if (savedId) {
+        void syncClassificaProductToAdministra(
+          {
+            produto_origem_id: savedId,
+            tipo_produto: 'Indeferimento',
+            numero_documento: formData.numProcesso || formData.protocolo || null,
+            status,
+            data_documento: formData.dataProtocolo || null,
+            analista_nome: payload.analista || currentUser?.name || null,
+            empreendedor_id: formData.empreendedorId || null,
+            empreendedor_nome: formData.nomeEmpreendedor || null,
+            empreendedor_cpf_cnpj: formData.cpfCnpj || null,
+            barragem_id: formData.barragemId || null,
+            barragem_nome: formData.nomeFazenda || null,
+            municipio: formData.municipioEmpreendimento || null,
+          },
+          currentUser
+        );
       }
 
       await refreshData();
@@ -506,64 +552,78 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
   };
 
   const handleClear = () => {
-    if (window.confirm('Tem certeza que deseja limpar todo o formulário?')) {
-      setFormData({
-        protocolo: '',
-        analista: currentUser?.name || '',
-        dataProtocolo: '',
-        situacao: 'Planejamento',
-        situacaoOutro: '',
-        docsGerais: DOCS_GERAIS.map(label => ({ id: crypto.randomUUID(), label, checked: false, pageNumber: '' })),
-        docsIdentificacao: DOCS_IDENTIFICACAO.map(label => ({ id: crypto.randomUUID(), label, checked: false, pageNumber: '', extraInput: '' })),
-        espolio: false,
-        docsEspolio: DOCS_ESPOLIO.map(label => ({ id: crypto.randomUUID(), label, checked: false, pageNumber: '', extraInput: '' })),
-        responsaveisTecnicos: [],
-        docsTecnicos: DOCS_TECNICOS.map(label => ({ id: crypto.randomUUID(), label, checked: false, pageNumber: '', extraInput: '' })),
-        numProcesso: '',
-        analistaRef: ANALISTAS[0],
-        analistaRefOutro: '',
-        nomeEmpreendedor: '',
-        cpfCnpj: '',
-        enderecoEmpreendimento: '',
-        nomeFazenda: '',
-        numCar: '',
-        municipioEmpreendimento: MUNICIPIOS[0],
-        latEixo: '',
-        longEixo: '',
-        finalidadeBarramento: FINALIDADES[0],
-        finalidadeBarramentoOutro: '',
-        situacaoEmpreendimento: SITUACOES_EP[0],
-        situacaoEmpreendimentoOutro: '',
-        numOficioEmitido: '',
-        dataOficioEmitido: '',
-        viaEncaminhamento: [],
-        viaEncaminhamentoOutro: '',
-        enderecoEncaminhamento: '',
-        dataRecebimentoOficio: '',
-        prazoConcedido: 0,
-        recebidoPorNome: '',
-        sistemaSituacao: 'Parecer Técnico emitido',
-        sistemaObservacoes: 'Processo indeferido por inércia',
-        sistemaEmpreendedor: '',
-        status: 'Rascunho',
-        tipo_documento: 'Indeferimento'
-      });
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Limpar Formulário',
+      message: 'Tem certeza que deseja limpar todo o formulário?',
+      variant: 'danger',
+      onConfirm: () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        setFormData({
+          protocolo: '',
+          analista: currentUser?.name || '',
+          dataProtocolo: '',
+          situacao: 'Planejamento',
+          situacaoOutro: '',
+          docsGerais: DOCS_GERAIS.map(label => ({ id: crypto.randomUUID(), label, checked: false, pageNumber: '' })),
+          docsIdentificacao: DOCS_IDENTIFICACAO.map(label => ({ id: crypto.randomUUID(), label, checked: false, pageNumber: '', extraInput: '' })),
+          espolio: false,
+          docsEspolio: DOCS_ESPOLIO.map(label => ({ id: crypto.randomUUID(), label, checked: false, pageNumber: '', extraInput: '' })),
+          responsaveisTecnicos: [],
+          docsTecnicos: DOCS_TECNICOS.map(label => ({ id: crypto.randomUUID(), label, checked: false, pageNumber: '', extraInput: '' })),
+          numProcesso: '',
+          analistaRef: ANALISTAS[0],
+          analistaRefOutro: '',
+          nomeEmpreendedor: '',
+          cpfCnpj: '',
+          enderecoEmpreendimento: '',
+          nomeFazenda: '',
+          numCar: '',
+          municipioEmpreendimento: MUNICIPIOS[0],
+          latEixo: '',
+          longEixo: '',
+          finalidadeBarramento: FINALIDADES[0],
+          finalidadeBarramentoOutro: '',
+          situacaoEmpreendimento: SITUACOES_EP[0],
+          situacaoEmpreendimentoOutro: '',
+          numOficioEmitido: '',
+          dataOficioEmitido: '',
+          viaEncaminhamento: [],
+          viaEncaminhamentoOutro: '',
+          enderecoEncaminhamento: '',
+          dataRecebimentoOficio: '',
+          prazoConcedido: 0,
+          recebidoPorNome: '',
+          sistemaSituacao: 'Parecer Técnico emitido',
+          sistemaObservacoes: 'Processo indeferido por inércia',
+          sistemaEmpreendedor: '',
+          status: 'Rascunho',
+          tipo_documento: 'Indeferimento'
+        });
+      }
+    });
   };
 
   const handleDelete = async () => {
     if (!formData.id) return;
-    if (window.confirm('Tem certeza que deseja excluir permanentemente este documento?')) {
-      try {
-        const { error } = await supabase.from('indeferimentos').delete().eq('id', formData.id);
-        if (error) throw error;
-        await refreshData();
-        onCancel();
-      } catch (err) {
-        console.error('Error deleting:', err);
-        alert('Erro ao excluir o documento.');
+    setConfirmModal({
+      isOpen: true,
+      title: 'Excluir Documento',
+      message: 'Tem certeza que deseja excluir permanentemente este documento?',
+      variant: 'danger',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        try {
+          const { error } = await supabase.from('indeferimentos').delete().eq('id', formData.id);
+          if (error) throw error;
+          await refreshData();
+          onCancel();
+        } catch (err) {
+          console.error('Error deleting:', err);
+          toast.error('Erro ao excluir o documento.');
+        }
       }
-    }
+    });
   };
 
   const exportToDocx = async () => {
@@ -1911,6 +1971,14 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
     </div>
   </section>
 </div>
+  <ConfirmModal
+    isOpen={confirmModal.isOpen}
+    title={confirmModal.title}
+    message={confirmModal.message}
+    variant={confirmModal.variant}
+    onConfirm={confirmModal.onConfirm}
+    onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+  />
 </div>
 );
 };

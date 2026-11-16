@@ -388,7 +388,7 @@ const InfoView: React.FC<InfoViewProps> = ({ currentUser, getGreeting }) => {
               <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700/50 backdrop-blur-sm">
                 <span className="text-white text-[10px] font-black uppercase tracking-widest block mb-3">Stack Tecnológica</span>
                 <div className="flex flex-wrap gap-2">
-                  {['React 19', 'TypeScript', 'Tailwind', 'Vite', 'Firebase'].map(tech => (
+                  {['React 19', 'TypeScript', 'Tailwind', 'Vite', 'Supabase'].map(tech => (
                     <span key={tech} className="text-[9px] font-mono text-slate-400 bg-slate-900 px-2 py-1 rounded border border-slate-700">{tech}</span>
                   ))}
                 </div>

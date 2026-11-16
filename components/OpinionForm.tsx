@@ -15,7 +15,13 @@ import {
   HeadingLevel,
 } from 'docx';
 import ConfirmModal from './ui/ConfirmModal';
-import { ParecerData, RiscoEnum, DanoEnum, DocItem, BarramentoData, EstruturaHidraulica, ResponsavelTecnicoEntry } from '../types';
+import { EcosystemSelector } from './EcosystemSelector';
+import {
+  saveBarragemMaster,
+  saveEmpreendedorMaster,
+  syncClassificaProductToAdministra,
+} from '../src/services/administraService';
+import { BarragemMaster, EmpreendedorMaster, ParecerData, RiscoEnum, DanoEnum, DocItem, BarramentoData, EstruturaHidraulica, ResponsavelTecnicoEntry } from '../types';
 import { generateParecerDoc } from '../services/docxService';
 import { supabase } from '../src/supabaseClient';
 import { AuthContext } from '../src/contexts/AuthContext';
@@ -1709,7 +1715,15 @@ GSALARH/SEMA-MT`;
         val_gerencial: formData.classificacao.valGerencial,
         risk_gerencial: formData.classificacao.riskGerencial,
         risco: formData.classificacao.risco,
-        resumo: formData.classificacao.resumo
+        resumo: formData.classificacao.resumo,
+        empreendedor_id: formData.empreendedorId || null,
+        barragem_id: formData.barragemId || null,
+        sistema_origem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
+        data: {
+          empreendedorId: formData.empreendedorId || null,
+          barragemId: formData.barragemId || null,
+          sistemaOrigem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
+        },
       };
 
       // 1. Upsert Parecer Principal
@@ -1893,13 +1907,88 @@ GSALARH/SEMA-MT`;
         }
       }
 
+      // Sincronização federada opcional com o Administra Barragens (não bloqueia salvamento local)
+      let empIdToSync = formData.empreendedorId || null;
+      let barIdToSync = formData.barragemId || null;
+      const digitsDoc = (formData.cpfCnpj || '').replace(/\D/g, '');
+      if (!empIdToSync && (digitsDoc.length === 11 || digitsDoc.length === 14) && formData.razaoSocial) {
+        const empSync = await saveEmpreendedorMaster(
+          {
+            cpf_cnpj: digitsDoc,
+            razao_social: formData.razaoSocial,
+            endereco: formData.localizacao,
+            municipio: formData.municipio,
+            num_car: formData.numCAR,
+          },
+          currentUser
+        );
+        if (empSync.success && empSync.data?.id) {
+          empIdToSync = empSync.data.id;
+        }
+      }
+      if (!barIdToSync && formData.barragemPrincipal?.nome && formData.municipio) {
+        const barSync = await saveBarragemMaster(
+          {
+            empreendedor_id: empIdToSync || undefined,
+            snisb: formData.barragemPrincipal.snisb || undefined,
+            nome: formData.barragemPrincipal.nome,
+            municipio: formData.municipio,
+            upg: formData.upg,
+            sub_bacia: formData.subBacia,
+            curso_agua: formData.cursoAgua,
+            localizacao: formData.localizacao,
+            lat_gms: formData.barragemPrincipal.lat,
+            long_gms: formData.barragemPrincipal.long,
+            altura_maxima: formData.barragemPrincipal.alturaMaxima,
+            comprimento_coroamento: formData.barragemPrincipal.comprimentoCoroamento,
+            largura_coroamento: formData.barragemPrincipal.larguraCoroamento,
+            volume_nmo: formData.barragemPrincipal.volumeNMO,
+            volume_nmm: formData.barragemPrincipal.volumeNMM,
+            tipo_estrutural: formData.barragemPrincipal.tipoEstrutural,
+            tipo_fundacao: formData.barragemPrincipal.tipoFundacao,
+            finalidade: formData.finalidade,
+            situacao: formData.situacaoEmpreendimento,
+            dpa_atual: formData.classificacao?.dpaClass,
+            cri_atual: formData.classificacao?.risco,
+          },
+          currentUser
+        );
+        if (barSync.success && barSync.data?.id) {
+          barIdToSync = barSync.data.id;
+        }
+      }
+
+      void syncClassificaProductToAdministra(
+        {
+          produto_origem_id: actualParecerId,
+          tipo_produto: 'Parecer Técnico',
+          numero_documento: formData.protocolo || null,
+          status,
+          data_documento: formData.data || null,
+          analista_nome: userName,
+          empreendedor_id: empIdToSync,
+          empreendedor_nome: formData.razaoSocial || null,
+          empreendedor_cpf_cnpj: digitsDoc || null,
+          barragem_id: barIdToSync,
+          barragem_nome: formData.barragemPrincipal?.nome || null,
+          barragem_snisb: formData.barragemPrincipal?.snisb || null,
+          municipio: formData.municipio || null,
+        },
+        currentUser
+      );
+
       toast.success(`Sucesso: Parecer salvo como ${status}!`);
       await logActivity(parecerId ? 'EDIT_OPINION' : 'CREATE_OPINION', { 
         protocolo: formData.protocolo, 
         interessado: formData.razaoSocial,
         status: status 
       });
-      setFormData(prev => ({ ...prev, status }));
+      setFormData(prev => ({
+        ...prev,
+        status,
+        empreendedorId: empIdToSync || prev.empreendedorId,
+        barragemId: barIdToSync || prev.barragemId,
+      }));
       onBack();
     } catch (error: any) {
       console.error("Erro ao salvar no Supabase:", error);
@@ -3001,6 +3090,50 @@ Este documento encontra embasamento na análise dos documentos disponibilizados 
                        )}
                     </div>
 
+                    <div className="mt-6">
+                      <EcosystemSelector
+                        selectedEmpreendedorId={formData.empreendedorId}
+                        selectedBarragemId={formData.barragemId}
+                        cpfCnpjFallback={formData.cpfCnpj}
+                        snisbFallback={formData.barragemPrincipal?.snisb}
+                        readOnly={readOnly}
+                        onSelectEmpreendedor={(emp: EmpreendedorMaster) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            empreendedorId: emp.id,
+                            razaoSocial: emp.razao_social || prev.razaoSocial,
+                            cpfCnpj: emp.cpf_cnpj ? maskCpfCnpj(emp.cpf_cnpj) : prev.cpfCnpj,
+                            localizacao: emp.endereco || prev.localizacao,
+                            municipio: emp.municipio || prev.municipio,
+                            numCAR: emp.num_car || prev.numCAR,
+                          }));
+                        }}
+                        onSelectBarragem={(bar: BarragemMaster) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            barragemId: bar.id,
+                            empreendedorId: bar.empreendedor_id || prev.empreendedorId,
+                            municipio: bar.municipio || prev.municipio,
+                            upg: bar.upg || prev.upg,
+                            subBacia: bar.sub_bacia || prev.subBacia,
+                            cursoAgua: bar.curso_agua || prev.cursoAgua,
+                            barragemPrincipal: {
+                              ...prev.barragemPrincipal,
+                              nome: bar.nome || prev.barragemPrincipal.nome,
+                              snisb: bar.snisb || prev.barragemPrincipal.snisb,
+                              lat: bar.lat_gms || prev.barragemPrincipal.lat,
+                              long: bar.long_gms || prev.barragemPrincipal.long,
+                              alturaMaxima: bar.altura_maxima || prev.barragemPrincipal.alturaMaxima,
+                              comprimentoCoroamento: bar.comprimento_coroamento || prev.barragemPrincipal.comprimentoCoroamento,
+                              larguraCoroamento: bar.largura_coroamento || prev.barragemPrincipal.larguraCoroamento,
+                              volumeNMO: bar.volume_nmo || prev.barragemPrincipal.volumeNMO,
+                              volumeNMM: bar.volume_nmm || prev.barragemPrincipal.volumeNMM,
+                            },
+                          }));
+                        }}
+                      />
+                    </div>
+
                     <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mt-6">
                        <h3 className="font-bold text-slate-700 text-sm mb-4 border-b border-slate-200 pb-2">Tabela 1. Informações do empreendedor e empreendimento</h3>
                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3584,10 +3717,17 @@ Este documento encontra embasamento na análise dos documentos disponibilizados 
                        {formData.customPortariaText && (
                          <button 
                            onClick={() => {
-                             if (window.confirm("Deseja realmente descartar as alterações manuais e voltar ao texto automático?")) {
-                               setFormData(p => ({ ...p, customPortariaText: null }));
-                               setIsEditingPortaria(false);
-                             }
+                             setConfirmModal({
+                               isOpen: true,
+                               title: 'Restaurar Texto Automático',
+                               message: 'Deseja realmente descartar as alterações manuais e voltar ao texto automático?',
+                               variant: 'warning',
+                               onConfirm: () => {
+                                 setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                                 setFormData(p => ({ ...p, customPortariaText: null }));
+                                 setIsEditingPortaria(false);
+                               }
+                             });
                            }}
                            className="flex items-center gap-2 px-4 py-2 bg-orange-50 text-orange-600 hover:bg-orange-100 rounded-lg font-medium transition-colors text-sm"
                          >

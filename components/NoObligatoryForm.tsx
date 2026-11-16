@@ -40,6 +40,8 @@ import { AuthContext } from '../src/contexts/AuthContext';
 import { DataContext } from '../src/contexts/DataContext';
 import { NoObligatoryData } from '../types';
 import { OPS_ANALISTA as ANALYST_LIST } from '../constants';
+import ConfirmModal from './ui/ConfirmModal';
+import { syncClassificaProductToAdministra } from '../src/services/administraService';
 
 interface NoObligatoryFormProps {
   onBack: () => void;
@@ -246,6 +248,19 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
   const { currentUser } = useContext(AuthContext);
   const { refreshData } = useContext(DataContext);
   const [isSaving, setIsSaving] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    variant: 'warning',
+    onConfirm: () => {},
+  });
   const [formData, setFormData] = useState({
     introduction: {
       receiptDate: '',
@@ -412,9 +427,16 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
   const artTextLong = formData.orderInfo.respTecnicos.map(rt => rt.art).join(', ');
 
   const handleClear = () => {
-    if (window.confirm("Você tem certeza que deseja limpar todo o formulário? Todos os dados não salvos serão perdidos.")) {
-      window.location.reload();
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Limpar Formulário',
+      message: 'Você tem certeza que deseja limpar todo o formulário? Todos os dados não salvos serão perdidos.',
+      variant: 'danger',
+      onConfirm: () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        window.location.reload();
+      }
+    });
   };
 
   const handleSave = async (isConcluido: boolean = false) => {
@@ -432,8 +454,8 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
     const newStatus = isConcluido ? 'Concluído' : 'Rascunho';
     
     try {
-      const payload = {
-        data: formData, // the full JSON
+      const basePayload = {
+        data: formData,
         analista: analystName,
         processo: formData.orderInfo.processo,
         status: newStatus,
@@ -445,19 +467,62 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
         updated_at: new Date().toISOString()
       };
 
+      const fullPayload = {
+        ...basePayload,
+        empreendedor_id: initialData?.empreendedorId || null,
+        barragem_id: initialData?.barragemId || null,
+        sistema_origem: initialData?.sistemaOrigem || 'CLASSIFICA_CSB',
+      };
+
       let result;
       if (initialData?.id) {
         result = await supabase
           .from('nao_obrigatoriedades')
-          .update(payload)
-          .eq('id', initialData.id);
+          .update(fullPayload)
+          .eq('id', initialData.id)
+          .select('id');
+        if (result.error?.code === '42703') {
+          result = await supabase
+            .from('nao_obrigatoriedades')
+            .update(basePayload)
+            .eq('id', initialData.id)
+            .select('id');
+        }
       } else {
         result = await supabase
           .from('nao_obrigatoriedades')
-          .insert([{ ...payload, created_at: new Date().toISOString() }]);
+          .insert([{ ...fullPayload, created_at: new Date().toISOString() }])
+          .select('id');
+        if (result.error?.code === '42703') {
+          result = await supabase
+            .from('nao_obrigatoriedades')
+            .insert([{ ...basePayload, created_at: new Date().toISOString() }])
+            .select('id');
+        }
       }
 
       if (result.error) throw result.error;
+
+      const savedId = result.data?.[0]?.id || initialData?.id;
+      if (savedId) {
+        void syncClassificaProductToAdministra(
+          {
+            produto_origem_id: savedId,
+            tipo_produto: 'Não Obrigatoriedade',
+            numero_documento: formData.orderInfo.processo || null,
+            status: newStatus,
+            analista_nome: analystName,
+            empreendedor_id: initialData?.empreendedorId || null,
+            empreendedor_nome: formData.orderInfo.empreendedor || null,
+            empreendedor_cpf_cnpj: formData.orderInfo.cpfCnpj || null,
+            barragem_id: initialData?.barragemId || null,
+            barragem_nome: formData.damInfo.principal.nome || null,
+            barragem_snisb: (formData.damInfo.principal as any).snisb || null,
+            municipio: formData.orderInfo.municipio || null,
+          },
+          currentUser
+        );
+      }
 
       toast.success(isConcluido ? "Parecer concluído com sucesso!" : "Rascunho salvo com sucesso!", {
         description: isConcluido ? "O documento foi finalizado e registrado." : "Seus dados foram armazenados com segurança.",
@@ -848,10 +913,17 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
           <button 
             type="button"
             onClick={() => {
-              if (window.confirm("Deseja realmente remover esta barragem a montante?")) {
-                const newList = formData.damInfo.upstreamDams.filter((_, i) => i !== index);
-                setFormData({...formData, damInfo: {...formData.damInfo, upstreamDams: newList}});
-              }
+              setConfirmModal({
+                isOpen: true,
+                title: 'Remover Barragem a Montante',
+                message: 'Deseja realmente remover esta barragem a montante?',
+                variant: 'danger',
+                onConfirm: () => {
+                  setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                  const newList = formData.damInfo.upstreamDams.filter((_, i) => i !== index);
+                  setFormData({...formData, damInfo: {...formData.damInfo, upstreamDams: newList}});
+                }
+              });
             }}
             className="absolute top-4 right-4 flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-500 rounded-lg text-[10px] font-black uppercase hover:bg-red-100 transition-all border border-red-100 cursor-pointer shadow-sm hover:shadow-md"
           >
@@ -2401,6 +2473,15 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
           {reviewExportContent}
         </CollapsibleSection>
       </div>
+
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };

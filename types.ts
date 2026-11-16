@@ -228,6 +228,9 @@ export interface ParecerData {
   tipo_documento: 'Parecer Técnico';
   created_at?: string;
   sistemaInformacoes?: InformacaoEmpreendedor;
+  empreendedorId?: string;
+  barragemId?: string;
+  sistemaOrigem?: SistemaOrigem;
 }
 
 export interface InformacaoEmpreendedor {
@@ -267,6 +270,9 @@ export interface OficioData {
   tipo_documento: 'Ofício de Pendências';
   tipo_oficio?: '1° Ofício de Pendências' | '2° Ofício de Pendências' | 'Ofício Geral';
   created_at?: string;
+  empreendedorId?: string;
+  barragemId?: string;
+  sistemaOrigem?: SistemaOrigem;
 }
 
 export type UserRole = 'Administrador' | 'Analista' | 'Visualizador';
@@ -318,6 +324,9 @@ export interface NoObligatoryData {
   lat?: string;
   long?: string;
   empreendedor?: string;
+  empreendedorId?: string;
+  barragemId?: string;
+  sistemaOrigem?: SistemaOrigem;
 }
 
 export interface RTRejectionEntry {
@@ -399,6 +408,9 @@ export interface RejectionData {
   lat?: string;
   long?: string;
   empreendedor?: string;
+  empreendedorId?: string;
+  barragemId?: string;
+  sistemaOrigem?: SistemaOrigem;
 }
 
 export interface TransferData {
@@ -452,4 +464,143 @@ export interface TransferData {
   lat?: string;
   long?: string;
   empreendedor?: string;
+  // Ecosystem integration canonical references
+  empreendedorId?: string;
+  barragemId?: string;
+  sistemaOrigem?: SistemaOrigem;
 }
+
+// ============================================================================
+// ECOSSISTEMA CSB (Administra Barragens, Classifica, Notifica, Fiscaliza)
+// ============================================================================
+
+export type SistemaOrigem =
+  | 'CLASSIFICA_CSB'
+  | 'ADMINISTRA_BARRAGENS'
+  | 'NOTIFICA_CSB'
+  | 'FISCALIZA_BARRAGENS';
+
+export type EntidadeTipoEcossistema =
+  | 'empreendedor'
+  | 'barragem'
+  | 'responsavel_tecnico'
+  | 'produto';
+
+export type SolicitacaoStatus = 'pendente' | 'aprovada' | 'reprovada';
+
+export interface EmpreendedorMaster {
+  id: string;
+  cpf_cnpj: string;
+  tipo_pessoa: 'PF' | 'PJ';
+  razao_social: string;
+  nome_fantasia?: string | null;
+  email?: string | null;
+  telefone?: string | null;
+  endereco?: string | null;
+  municipio?: string | null;
+  num_car?: string | null;
+  sistema_origem: SistemaOrigem;
+  created_by_user_id?: string | null;
+  created_by_name?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface BarragemMaster {
+  id: string;
+  empreendedor_id?: string | null;
+  empreendedor_nome?: string | null;
+  empreendedor_cpf_cnpj?: string | null;
+  snisb?: string | null;
+  nome: string;
+  municipio: string;
+  upg?: string | null;
+  sub_bacia?: string | null;
+  curso_agua?: string | null;
+  zona?: 'Rural' | 'Urbana' | string | null;
+  localizacao?: string | null;
+  lat_gms?: string | null;
+  long_gms?: string | null;
+  lat_decimal?: number | null;
+  long_decimal?: number | null;
+  altura_maxima?: string | null;
+  comprimento_coroamento?: string | null;
+  largura_coroamento?: string | null;
+  volume_nmo?: string | null;
+  volume_nmm?: string | null;
+  tipo_estrutural?: string | null;
+  tipo_fundacao?: string | null;
+  finalidade?: string | null;
+  situacao?: string | null;
+  dpa_atual?: string | null;
+  cri_atual?: string | null;
+  enquadramento_pnsb?: boolean | null;
+  sistema_origem: SistemaOrigem;
+  created_by_user_id?: string | null;
+  created_by_name?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ResponsavelTecnicoMaster {
+  id: string;
+  nome: string;
+  cpf?: string | null;
+  registro_profissional?: string | null;
+  email?: string | null;
+  telefone?: string | null;
+  sistema_origem: SistemaOrigem;
+  created_by_user_id?: string | null;
+  created_by_name?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SolicitacaoAlteracao {
+  id: string;
+  entidade_tipo: EntidadeTipoEcossistema;
+  entidade_id: string;
+  entidade_rotulo?: string | null;
+  sistema_solicitante: SistemaOrigem;
+  sistema_destino_proprietario: SistemaOrigem;
+  solicitante_user_id?: string | null;
+  solicitante_nome: string;
+  solicitante_email?: string | null;
+  dados_atuais: Record<string, any>;
+  dados_propostos: Record<string, any>;
+  justificativa: string;
+  status: SolicitacaoStatus;
+  analisado_por_user_id?: string | null;
+  analisado_por_nome?: string | null;
+  parecer_analise?: string | null;
+  created_at: string;
+  analisado_at?: string | null;
+}
+
+export interface ProdutoEcossistemaResumo {
+  id: string;
+  sistema_origem: SistemaOrigem;
+  produto_origem_id: string;
+  tipo_produto: string;
+  numero_documento?: string | null;
+  status?: string | null;
+  data_documento?: string | null;
+  analista_nome?: string | null;
+  empreendedor_id?: string | null;
+  empreendedor_nome?: string | null;
+  empreendedor_cpf_cnpj?: string | null;
+  barragem_id?: string | null;
+  barragem_nome?: string | null;
+  barragem_snisb?: string | null;
+  municipio?: string | null;
+  created_at?: string;
+}
+
+export interface EcosystemSystemStatus {
+  id: SistemaOrigem;
+  nome: string;
+  papel: string;
+  configured: boolean;
+  readOnlyFromClassifica: boolean;
+}
+

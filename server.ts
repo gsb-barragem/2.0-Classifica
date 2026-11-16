@@ -43,6 +43,11 @@ async function startServer() {
   app.use((_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+    res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+    if (isProduction) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
     next();
   });
 

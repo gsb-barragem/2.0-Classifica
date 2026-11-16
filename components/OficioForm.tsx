@@ -9,8 +9,10 @@ import { supabase } from '../src/supabaseClient';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { handleSupabaseError, OperationType } from '../src/utils/supabaseErrorHandler';
 import { generateOficioDoc } from '../services/docxService';
+import { EcosystemSelector } from './EcosystemSelector';
+import { syncClassificaProductToAdministra } from '../src/services/administraService';
 
-import { OficioData } from '../types';
+import { BarragemMaster, EmpreendedorMaster, OficioData } from '../types';
 
 const INITIAL_STATE: OficioData = {
   protocolo: '',
@@ -186,8 +188,11 @@ const OficioForm: React.FC<OficioFormProps> = ({ onBack, initialData, readOnly }
         analista: userName,
         status,
         tipo_documento: 'Ofício de Pendências' as const,
+        sistema_origem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
         updated_at: new Date().toISOString()
       };
+
+      let savedId = formData.id;
 
       const { data: upsertData, error: upsertError } = await supabase
         .from('oficios')
@@ -199,13 +204,14 @@ const OficioForm: React.FC<OficioFormProps> = ({ onBack, initialData, readOnly }
           tipo_oficio: formData.tipo_oficio,
           user_id: currentUser.id,
           analista: userName,
+          empreendedor_id: formData.empreendedorId || null,
+          barragem_id: formData.barragemId || null,
+          sistema_origem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
           updated_at: new Date().toISOString()
         })
         .select();
 
       if (upsertError) {
-        console.error('Supabase Upsert Error:', upsertError);
-        // Se o erro for de coluna inexistente (42703), tenta salvar apenas no campo 'data'
         if (upsertError.code === '42703') {
            const { data: retryData, error: retryError } = await supabase
             .from('oficios')
@@ -221,15 +227,35 @@ const OficioForm: React.FC<OficioFormProps> = ({ onBack, initialData, readOnly }
            if (retryError) await handleSupabaseError(retryError, OperationType.UPSERT, 'oficios');
            
            if (retryData && retryData[0]) {
+             savedId = retryData[0].id;
              setFormData(prev => ({ ...prev, id: retryData[0].id, status }));
            }
         } else {
           await handleSupabaseError(upsertError, OperationType.UPSERT, 'oficios');
         }
       } else if (upsertData && upsertData[0]) {
+        savedId = upsertData[0].id;
         setFormData(prev => ({ ...prev, id: upsertData[0].id, status }));
       } else {
         setFormData(prev => ({ ...prev, status }));
+      }
+
+      if (savedId) {
+        void syncClassificaProductToAdministra(
+          {
+            produto_origem_id: savedId,
+            tipo_produto: 'Ofício de Pendências',
+            numero_documento: formData.protocolo || null,
+            status,
+            data_documento: formData.data || null,
+            analista_nome: userName,
+            empreendedor_id: formData.empreendedorId || null,
+            empreendedor_nome: formData.interessado || null,
+            barragem_id: formData.barragemId || null,
+            municipio: formData.municipio || null,
+          },
+          currentUser
+        );
       }
 
       toast.success(`Ofício salvo como ${status} com sucesso!`);
@@ -372,6 +398,31 @@ const OficioForm: React.FC<OficioFormProps> = ({ onBack, initialData, readOnly }
                     </label>
                   ))}
                 </div>
+              </div>
+              <div className="md:col-span-2">
+                <EcosystemSelector
+                  selectedEmpreendedorId={formData.empreendedorId}
+                  selectedBarragemId={formData.barragemId}
+                  readOnly={readOnly}
+                  onSelectEmpreendedor={(emp: EmpreendedorMaster) => {
+                    setFormData(prev => ({
+                      ...prev,
+                      empreendedorId: emp.id,
+                      interessado: emp.razao_social || prev.interessado,
+                      municipio: emp.municipio || prev.municipio,
+                    }));
+                  }}
+                  onSelectBarragem={(bar: BarragemMaster) => {
+                    setFormData(prev => ({
+                      ...prev,
+                      barragemId: bar.id,
+                      empreendedorId: bar.empreendedor_id || prev.empreendedorId,
+                      municipio: bar.municipio || prev.municipio,
+                      lat: bar.lat_gms || prev.lat,
+                      long: bar.long_gms || prev.long,
+                    }));
+                  }}
+                />
               </div>
               <div className="md:col-span-2 space-y-2">
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Interessado / Empreendimento</label>

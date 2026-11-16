@@ -34,6 +34,8 @@ import { supabase } from '../src/supabaseClient';
 import { getUpgsForMunicipality } from '../src/data/upgData';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { OPS_ANALISTA as ANALISTAS } from '../constants';
+import ConfirmModal from './ui/ConfirmModal';
+import { syncClassificaProductToAdministra } from '../src/services/administraService';
 import { 
   Document, 
   Packer, 
@@ -134,6 +136,19 @@ const MUNICIPIOS = [
 const TransferForm: React.FC<TransferFormProps> = ({ initialData, onBack, onSave, readOnly }) => {
   const { currentUser } = useContext(AuthContext);
   const [isSaving, setIsSaving] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    variant: 'warning',
+    onConfirm: () => {},
+  });
   const [formData, setFormData] = useState({
     ...INITIAL_DATA,
     docs: INITIAL_DOCS.map(doc => ({ ...doc, checked: false, extraInput: '', pageNumber: '' })) as DocItem[]
@@ -677,13 +692,20 @@ GSALARH/SEMA-MT`;
   };
 
   const handleLimpar = () => {
-    if (window.confirm("Tem certeza que deseja limpar todo o preenchimento do formulário? Esta ação não pode ser desfeita.")) {
-      setFormData({
-        ...INITIAL_DATA,
-        docs: INITIAL_DOCS.map(doc => ({ ...doc, checked: false, extraInput: '', pageNumber: '' })) as DocItem[]
-      });
-      toast.success("Formulário limpo com sucesso.");
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Limpar Formulário',
+      message: 'Tem certeza que deseja limpar todo o preenchimento do formulário? Esta ação não pode ser desfeita.',
+      variant: 'danger',
+      onConfirm: () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        setFormData({
+          ...INITIAL_DATA,
+          docs: INITIAL_DOCS.map(doc => ({ ...doc, checked: false, extraInput: '', pageNumber: '' })) as DocItem[]
+        });
+        toast.success("Formulário limpo com sucesso.");
+      }
+    });
   };
 
   const saveToSupabase = async (status: 'rascunho' | 'concluido') => {
@@ -732,18 +754,52 @@ GSALARH/SEMA-MT`;
       enquadrada_pnsb: formData.enquadradaPNSB,
       classe_enquadramento: formData.classeEnquadramento,
       docs: formData.docs,
-      custom_portaria_text: formData.customPortariaText
+      custom_portaria_text: formData.customPortariaText,
+      empreendedor_id: (formData as any).empreendedorId || null,
+      barragem_id: (formData as any).barragemId || null,
+      sistema_origem: (formData as any).sistemaOrigem || 'CLASSIFICA_CSB',
     };
 
     if (initialData?.id) {
       dbData.id = initialData.id;
     }
 
-    const { error } = await supabase
+    let upsertRes = await supabase
       .from('transferencias_titularidade')
-      .upsert([dbData]);
+      .upsert([dbData])
+      .select('id');
 
-    if (error) throw error;
+    if (upsertRes.error?.code === '42703') {
+      const { empreendedor_id: _e, barragem_id: _b, sistema_origem: _s, ...legacyDbData } = dbData;
+      upsertRes = await supabase
+        .from('transferencias_titularidade')
+        .upsert([legacyDbData])
+        .select('id');
+    }
+
+    if (upsertRes.error) throw upsertRes.error;
+
+    const savedId = upsertRes.data?.[0]?.id || initialData?.id;
+    if (savedId) {
+      void syncClassificaProductToAdministra(
+        {
+          produto_origem_id: savedId,
+          tipo_produto: 'Transferência de Titularidade',
+          numero_documento: formData.nProcesso || null,
+          status: status === 'concluido' ? 'Concluído' : 'Rascunho',
+          data_documento: formData.dataProtocolo || null,
+          analista_nome: formData.analista || currentUser?.name || null,
+          empreendedor_id: (formData as any).empreendedorId || null,
+          empreendedor_nome: formData.novoProprietario || null,
+          empreendedor_cpf_cnpj: formData.novoDoc || null,
+          barragem_id: (formData as any).barragemId || null,
+          barragem_nome: formData.nomeFazenda || null,
+          barragem_snisb: formData.snisb || null,
+          municipio: formData.municipio || null,
+        },
+        currentUser
+      );
+    }
   };
 
   const handleConcluir = async () => {
@@ -2062,10 +2118,17 @@ GSALARH/SEMA-MT`;
                     </button>
                     <button 
                       onClick={() => {
-                        if (window.confirm("Deseja restaurar o texto para o padrão gerado automaticamente? Suas edições manuais serão perdidas.")) {
-                          setFormData(p => ({ ...p, customPortariaText: null }));
-                          setIsEditingPortaria(false);
-                        }
+                        setConfirmModal({
+                          isOpen: true,
+                          title: 'Restaurar Texto Automático',
+                          message: 'Deseja restaurar o texto para o padrão gerado automaticamente? Suas edições manuais serão perdidas.',
+                          variant: 'warning',
+                          onConfirm: () => {
+                            setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                            setFormData(p => ({ ...p, customPortariaText: null }));
+                            setIsEditingPortaria(false);
+                          }
+                        });
                       }}
                       className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-all font-bold text-[10px] uppercase tracking-widest text-slate-700 shadow-sm"
                     >
@@ -2106,6 +2169,15 @@ GSALARH/SEMA-MT`;
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };

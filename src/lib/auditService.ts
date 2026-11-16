@@ -1,6 +1,40 @@
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 
-export type AuditAction = 'LOGIN_SUCCESS' | 'LOGIN_FAIL' | 'LOGOUT' | 'CREATE_OPINION' | 'EDIT_OPINION' | 'DELETE_OPINION' | 'DELETE_OFICIO' | 'DELETE_NOTIFICACAO' | 'USER_CREATED' | 'USER_DELETED' | 'USER_PROFILE_UPDATED' | 'ACCESS_REQUEST_APPROVED' | 'ACCESS_REQUEST_REJECTED' | 'PASSWORD_CHANGED' | 'DOWNLOAD_DOCUMENT' | 'USER_PASSWORD_RESET' | 'USER_ACTIVATED' | 'USER_INACTIVATED';
+export type AuditAction =
+  | 'LOGIN_SUCCESS'
+  | 'LOGIN_FAIL'
+  | 'LOGOUT'
+  | 'CREATE_OPINION'
+  | 'EDIT_OPINION'
+  | 'DELETE_OPINION'
+  | 'DELETE_OFICIO'
+  | 'DELETE_NOTIFICACAO'
+  | 'USER_CREATED'
+  | 'USER_DELETED'
+  | 'USER_PROFILE_UPDATED'
+  | 'ACCESS_REQUEST_APPROVED'
+  | 'ACCESS_REQUEST_REJECTED'
+  | 'PASSWORD_CHANGED'
+  | 'DOWNLOAD_DOCUMENT'
+  | 'USER_PASSWORD_RESET'
+  | 'USER_ACTIVATED'
+  | 'USER_INACTIVATED'
+  | 'ECOSYSTEM_ENTITY_CREATED'
+  | 'ECOSYSTEM_ENTITY_UPDATED'
+  | 'ECOSYSTEM_CHANGE_REQUEST_SENT'
+  | 'ECOSYSTEM_CHANGE_REQUEST_REVIEWED'
+  | 'ECOSYSTEM_SYNC_PRODUCT';
+
+const SENSITIVE_KEYS = new Set(['password', 'senha', 'token', 'access_token', 'refresh_token', 'secret', 'key', 'apikey', 'password_hash']);
+
+function sanitizeDetails(details: Record<string, unknown>): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(details || {})) {
+    if (SENSITIVE_KEYS.has(k.toLowerCase())) continue;
+    clean[k] = v;
+  }
+  return clean;
+}
 
 export async function logActivity(action: AuditAction, details: Record<string, unknown> = {}) {
   if (!isSupabaseConfigured()) return;
@@ -13,11 +47,11 @@ export async function logActivity(action: AuditAction, details: Record<string, u
       user_name: userName,
       user_role: user ? 'Usuário autenticado' : 'Convidado',
       action,
-      details,
+      details: sanitizeDetails(details),
       user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
     });
   } catch (error) {
     // Auditoria nunca deve derrubar o fluxo principal nem registrar credenciais.
-    console.error('Falha ao registrar atividade:', error);
+    console.warn('Falha ao registrar atividade de auditoria.');
   }
 }

@@ -37,13 +37,7 @@ export const ChangePassword: React.FC<ChangePasswordProps> = ({ forced = false, 
       if (forced || currentUser?.forcePasswordChange) {
         const { error: rpcError } = await supabase.rpc('classifica_finish_password_change');
         if (rpcError) {
-          const { data: { user } } = await supabase.auth.getUser();
-          if (user) {
-            await supabase
-              .from('users')
-              .update({ force_password_change: false, force_password_change_at: new Date().toISOString() })
-              .eq('auth_user_id', user.id);
-          }
+          throw new Error('Não foi possível concluir a validação de troca de senha no servidor.');
         }
       }
       await logActivity('PASSWORD_CHANGED');

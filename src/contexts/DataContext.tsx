@@ -117,6 +117,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           status: (p.status || baseData.status || 'Rascunho') as 'Rascunho' | 'Concluído',
           tipo_documento: 'Parecer Técnico' as const,
           dataConclusao: p.data_conclusao || baseData.dataConclusao,
+          empreendedorId: p.empreendedor_id || baseData.empreendedorId,
+          barragemId: p.barragem_id || baseData.barragemId,
+          sistemaOrigem: p.sistema_origem || baseData.sistemaOrigem || 'CLASSIFICA_CSB',
           
           responsaveisTecnicos: p.parecer_responsaveis?.length > 0 
             ? p.parecer_responsaveis.map((rt: any) => ({
@@ -297,7 +300,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           status: (o.status || 'Rascunho') as 'Rascunho' | 'Concluído',
           tipo_documento: 'Ofício de Pendências' as const,
           municipio: o.data?.municipio || o.municipio || '',
-          created_at: o.created_at
+          created_at: o.created_at,
+          empreendedorId: o.empreendedor_id || o.data?.empreendedorId,
+          barragemId: o.barragem_id || o.data?.barragemId,
+          sistemaOrigem: o.sistema_origem || o.data?.sistemaOrigem || 'CLASSIFICA_CSB',
         }));
 
         setOficios(mappedOficios);
@@ -327,7 +333,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           long: n.long,
           empreendedor: n.empreendedor,
           created_at: n.created_at,
-          updated_at: n.updated_at
+          updated_at: n.updated_at,
+          empreendedorId: n.empreendedor_id || n.data?.empreendedorId,
+          barragemId: n.barragem_id || n.data?.barragemId,
+          sistemaOrigem: n.sistema_origem || n.data?.sistemaOrigem || 'CLASSIFICA_CSB',
         }));
 
         setNoObligatoriedades(mappedNoObligatoriedades);
@@ -394,7 +403,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             municipio: i.municipio || baseData.municipio,
             lat: i.lat_eixo || i.lat,
             long: i.long_eixo || i.long,
-            empreendedor: i.nome_empreendedor || i.empreendedor
+            empreendedor: i.nome_empreendedor || i.empreendedor,
+            empreendedorId: i.empreendedor_id || baseData.empreendedorId,
+            barragemId: i.barragem_id || baseData.barragemId,
+            sistemaOrigem: i.sistema_origem || baseData.sistemaOrigem || 'CLASSIFICA_CSB',
           };
         });
         setIndeferimentos(mappedIndeferimentos);
@@ -456,7 +468,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           updated_at: t.updated_at,
           lat: t.lat_gms,
           long: t.long_gms,
-          empreendedor: t.novo_proprietario
+          empreendedor: t.novo_proprietario,
+          empreendedorId: t.empreendedor_id,
+          barragemId: t.barragem_id,
+          sistemaOrigem: t.sistema_origem || 'CLASSIFICA_CSB',
         }));
         setTransferencias(mappedTransferencias);
       }
