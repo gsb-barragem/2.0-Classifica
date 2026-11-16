@@ -101,7 +101,7 @@ function isProfileActive(profile: Record<string, unknown> | null | undefined): b
 }
 
 async function verifyClassificaSession(bearerToken: string): Promise<
-  | { ok: true; userId: string }
+  | { ok: true; userId: string; classificaUrl: string }
   | { ok: false; status: number; code: string; error: string }
 > {
   const classificaUrl = normalizeOrigin(
@@ -164,14 +164,14 @@ async function verifyClassificaSession(bearerToken: string): Promise<
         error: 'Usuário autenticado, porém sem acesso ativo ou com troca de senha pendente no Classifica CSB.',
       };
     }
-    return { ok: true, userId: authUser.id };
+    return { ok: true, userId: authUser.id, classificaUrl };
   }
 
   const profileRpc = await userScopedClient.rpc('classifica_my_profile');
   if (!profileRpc.error && profileRpc.data) {
     const row = Array.isArray(profileRpc.data) ? profileRpc.data[0] : profileRpc.data;
     if (isProfileActive(row as Record<string, unknown>) && row?.force_password_change !== true) {
-      return { ok: true, userId: authUser.id };
+      return { ok: true, userId: authUser.id, classificaUrl };
     }
     return {
       ok: false,
@@ -213,7 +213,7 @@ async function verifyClassificaSession(bearerToken: string): Promise<
       if (!byAuthId.error && byAuthId.data) {
         const rec = byAuthId.data as unknown as Record<string, unknown>;
         if (isProfileActive(rec) && rec.force_password_change !== true) {
-          return { ok: true, userId: authUser.id };
+          return { ok: true, userId: authUser.id, classificaUrl };
         }
         return {
           ok: false,
@@ -232,7 +232,7 @@ async function verifyClassificaSession(bearerToken: string): Promise<
     if (!byId.error && byId.data) {
       const rec = byId.data as unknown as Record<string, unknown>;
       if (isProfileActive(rec) && rec.force_password_change !== true) {
-        return { ok: true, userId: authUser.id };
+        return { ok: true, userId: authUser.id, classificaUrl };
       }
       return {
         ok: false,
@@ -251,7 +251,7 @@ async function verifyClassificaSession(bearerToken: string): Promise<
       if (!byEmail.error && byEmail.data) {
         const rec = byEmail.data as unknown as Record<string, unknown>;
         if (isProfileActive(rec) && rec.force_password_change !== true) {
-          return { ok: true, userId: authUser.id };
+          return { ok: true, userId: authUser.id, classificaUrl };
         }
         return {
           ok: false,
@@ -271,17 +271,67 @@ async function verifyClassificaSession(bearerToken: string): Promise<
   };
 }
 
-function getAdministraServerClient():
-  | { ok: true; client: SupabaseClient }
-  | { ok: false; status: number; code: string; error: string } {
-  const url = normalizeOrigin(process.env.ADMINISTRA_SUPABASE_URL);
-  const secretKey = (
-    process.env.ADMINISTRA_SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.ADMINISTRA_SUPABASE_SECRET_KEY ||
-    process.env.SUPABASE_ADMINISTRA_SERVICE_ROLE_KEY ||
-    process.env.ADMINISTRA_SERVICE_ROLE_KEY ||
-    ''
-  ).trim();
+export interface AdministraRuntimeMeta {
+  administraUrlPresent: boolean;
+  administraServiceRoleKeyPresent: boolean;
+  administraHost: string;
+  keyFormat: 'jwt' | 'sb_secret' | 'sb_publishable' | 'unknown';
+  role: string;
+  classificaTokenForwarded: false;
+}
+
+function inspectSupabaseKeyMeta(secretKey: string): {
+  keyFormat: AdministraRuntimeMeta['keyFormat'];
+  role: string;
+  ref: string | null;
+} {
+  if (secretKey.startsWith('sb_secret_')) {
+    return { keyFormat: 'sb_secret', role: 'service_role', ref: null };
+  }
+  if (secretKey.startsWith('sb_publishable_')) {
+    return { keyFormat: 'sb_publishable', role: 'anon', ref: null };
+  }
+  const parts = secretKey.split('.');
+  if (parts.length === 3) {
+    try {
+      const jsonStr = Buffer.from(parts[1], 'base64url').toString('utf8');
+      const payload = JSON.parse(jsonStr) as Record<string, unknown>;
+      const role = typeof payload?.role === 'string' && payload.role.trim()
+        ? payload.role.trim()
+        : 'unknown';
+      const ref = typeof payload?.ref === 'string' && payload.ref.trim()
+        ? payload.ref.trim()
+        : null;
+      return { keyFormat: 'jwt', role, ref };
+    } catch {
+      return { keyFormat: 'unknown', role: 'unknown', ref: null };
+    }
+  }
+  return { keyFormat: 'unknown', role: 'unknown', ref: null };
+}
+
+function extractHostAndRef(origin: string): { host: string; urlRef: string | null } {
+  if (!origin) return { host: '', urlRef: null };
+  try {
+    const parsed = new URL(origin);
+    const host = parsed.host;
+    const urlRef = parsed.hostname.endsWith('.supabase.co')
+      ? parsed.hostname.split('.')[0] || null
+      : null;
+    return { host, urlRef };
+  } catch {
+    return { host: '', urlRef: null };
+  }
+}
+
+function getAdministraServerClient(classificaUrl?: string):
+  | { ok: true; client: SupabaseClient; meta: AdministraRuntimeMeta }
+  | { ok: false; status: number; code: string; error: string; meta?: Partial<AdministraRuntimeMeta> } {
+  // Exclusivamente ADMINISTRA_SUPABASE_URL e ADMINISTRA_SUPABASE_SERVICE_ROLE_KEY (sem fallbacks ou VITE_)
+  const rawUrl = process.env.ADMINISTRA_SUPABASE_URL;
+  const url = normalizeOrigin(rawUrl);
+  const secretKey = (process.env.ADMINISTRA_SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const { host: administraHost, urlRef } = extractHostAndRef(url);
 
   if (!url || !secretKey) {
     return {
@@ -290,8 +340,79 @@ function getAdministraServerClient():
       code: 'ADMINISTRA_SERVER_CONFIG_MISSING',
       error:
         'Configuração server-side do Administra Barragens ausente. Defina ADMINISTRA_SUPABASE_URL e ADMINISTRA_SUPABASE_SERVICE_ROLE_KEY (sem prefixo VITE_) no servidor.',
+      meta: {
+        administraUrlPresent: Boolean(url),
+        administraServiceRoleKeyPresent: Boolean(secretKey),
+        administraHost,
+        classificaTokenForwarded: false,
+      },
     };
   }
+
+  if (classificaUrl && url === classificaUrl) {
+    return {
+      ok: false,
+      status: 503,
+      code: 'ADMINISTRA_URL_POINTS_TO_CLASSIFICA',
+      error:
+        'ADMINISTRA_SUPABASE_URL está apontando para o mesmo projeto Supabase do Classifica CSB em vez do projeto Administra Barragens.',
+      meta: {
+        administraUrlPresent: true,
+        administraServiceRoleKeyPresent: true,
+        administraHost,
+        classificaTokenForwarded: false,
+      },
+    };
+  }
+
+  const keyMeta = inspectSupabaseKeyMeta(secretKey);
+
+  if (keyMeta.keyFormat === 'sb_publishable' || (keyMeta.keyFormat === 'jwt' && keyMeta.role !== 'service_role') || keyMeta.keyFormat === 'unknown') {
+    return {
+      ok: false,
+      status: 503,
+      code: 'ADMINISTRA_INVALID_KEY_ROLE',
+      error: `A variável ADMINISTRA_SUPABASE_SERVICE_ROLE_KEY não possui papel service_role (papel detectado: "${keyMeta.role}", formato: ${keyMeta.keyFormat}).`,
+      meta: {
+        administraUrlPresent: true,
+        administraServiceRoleKeyPresent: true,
+        administraHost,
+        keyFormat: keyMeta.keyFormat,
+        role: keyMeta.role,
+        classificaTokenForwarded: false,
+      },
+    };
+  }
+
+  if (keyMeta.ref && urlRef && keyMeta.ref !== urlRef) {
+    return {
+      ok: false,
+      status: 503,
+      code: 'ADMINISTRA_KEY_PROJECT_MISMATCH',
+      error:
+        'A chave em ADMINISTRA_SUPABASE_SERVICE_ROLE_KEY pertence a um projeto Supabase diferente da URL configurada em ADMINISTRA_SUPABASE_URL.',
+      meta: {
+        administraUrlPresent: true,
+        administraServiceRoleKeyPresent: true,
+        administraHost,
+        keyFormat: keyMeta.keyFormat,
+        role: keyMeta.role,
+        classificaTokenForwarded: false,
+      },
+    };
+  }
+
+  const isolatedFetch: typeof fetch = (input, init) => {
+    const headers = new Headers(init?.headers);
+    // Garante isolamento absoluto: nunca repassar Authorization de usuário Classifica.
+    headers.delete('Authorization');
+    headers.delete('authorization');
+    headers.set('apikey', secretKey);
+    if (keyMeta.keyFormat === 'jwt') {
+      headers.set('Authorization', `Bearer ${secretKey}`);
+    }
+    return fetch(input, { ...init, headers });
+  };
 
   const client = createClient(url, secretKey, {
     auth: {
@@ -300,18 +421,31 @@ function getAdministraServerClient():
       detectSessionInUrl: false,
     },
     global: {
+      fetch: isolatedFetch,
       headers: {
         'X-Client-Info': 'classifica-server-to-administra-rpc',
       },
     },
   });
 
-  return { ok: true, client };
+  return {
+    ok: true,
+    client,
+    meta: {
+      administraUrlPresent: true,
+      administraServiceRoleKeyPresent: true,
+      administraHost,
+      keyFormat: keyMeta.keyFormat,
+      role: keyMeta.role,
+      classificaTokenForwarded: false,
+    },
+  };
 }
 
 function classifyRpcError(
   rpc: AdministraRpcName,
-  err: { code?: string; message?: string; details?: string | null; hint?: string | null; status?: number }
+  err: { code?: string; message?: string; details?: string | null; hint?: string | null; status?: number },
+  meta?: AdministraRuntimeMeta
 ) {
   const code = err.code || undefined;
   const message = err.message || `Erro ao executar ${rpc}.`;
@@ -325,6 +459,8 @@ function classifyRpcError(
     lower.includes('row-level security') ||
     lower.includes('policy');
 
+  const roleHint = meta ? ` [papel=${meta.role}, formato=${meta.keyFormat}, host=${meta.administraHost}]` : '';
+
   return {
     rpc,
     code,
@@ -333,8 +469,10 @@ function classifyRpcError(
     details: err.details ?? null,
     hint: err.hint ?? null,
     isRlsOrPermission,
+    administraRole: meta?.role,
+    administraHost: meta?.administraHost,
     userMessage: isRlsOrPermission
-      ? `Permissão/RLS bloqueou a execução da RPC ${rpc} (${code || err.status || '401'}: ${message}).`
+      ? `Permissão/RLS bloqueou a execução da RPC ${rpc} (${code || err.status || '401'}: ${message})${roleHint}.`
       : `Falha na RPC ${rpc}: ${message}${code ? ` (${code})` : ''}.`,
   };
 }
@@ -528,13 +666,14 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
     return;
   }
 
-  const administraCheck = getAdministraServerClient();
+  const administraCheck = getAdministraServerClient(sessionCheck.classificaUrl);
   if (administraCheck.ok === false) {
     sendJson(res, administraCheck.status, {
       ok: false,
       configured: false,
       code: administraCheck.code,
       error: administraCheck.error,
+      meta: administraCheck.meta,
     });
     return;
   }
@@ -564,6 +703,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
   const offset = Math.max(0, (pageNum - 1) * pageSize);
 
   const client = administraCheck.client;
+  const runtimeMeta = administraCheck.meta;
 
   if (action === 'diagnostico') {
     const [empRes, barRes, rtRes, vincRes] = await Promise.all([
@@ -579,6 +719,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
     sendJson(res, 200, {
       ok: true,
       configured: true,
+      meta: runtimeMeta,
       diagnostics: [
         {
           rpc: 'csb_ler_empreendedores',
@@ -592,7 +733,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
             ? 0
             : null,
           hasRecords: !empRes.error && empRes.rows.length > 0,
-          error: empRes.error,
+          error: empRes.error ? { ...empRes.error, administraRole: runtimeMeta.role, administraHost: runtimeMeta.administraHost } : undefined,
         },
         {
           rpc: 'csb_ler_barragens',
@@ -606,7 +747,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
             ? 0
             : null,
           hasRecords: !barRes.error && barRes.rows.length > 0,
-          error: barRes.error,
+          error: barRes.error ? { ...barRes.error, administraRole: runtimeMeta.role, administraHost: runtimeMeta.administraHost } : undefined,
         },
         {
           rpc: 'csb_ler_rts',
@@ -614,7 +755,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
           accessible: !rtRes.error,
           totalCount: rtRes.error ? null : rtRes.total,
           hasRecords: !rtRes.error && rtRes.total > 0,
-          error: rtRes.error,
+          error: rtRes.error ? { ...rtRes.error, administraRole: runtimeMeta.role, administraHost: runtimeMeta.administraHost } : undefined,
         },
         {
           rpc: 'csb_ler_vinculos_rt_barragem',
@@ -622,7 +763,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
           accessible: !vincRes.error,
           totalCount: vincRes.error ? null : vincRes.total,
           hasRecords: !vincRes.error && vincRes.total > 0,
-          error: vincRes.error,
+          error: vincRes.error ? { ...vincRes.error, administraRole: runtimeMeta.role, administraHost: runtimeMeta.administraHost } : undefined,
         },
       ],
     });
