@@ -105,6 +105,7 @@ export interface BarramentoData {
   snisb: string;
   lat: string;
   long: string;
+  relacaoBarragemPrincipal?: 'Barragem em sequência' | 'Reservatório comunicante' | '';
   alturaMaxima: string;
   alturaMaximaFls: string;
   bordaLivre: string;
