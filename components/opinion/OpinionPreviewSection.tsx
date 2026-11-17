@@ -6,7 +6,7 @@ import {
   buildAutomaticIntroText,
   cleanOptionScore,
   evaluateCt5Age,
-  getQuadro6RegulatorioRows,
+  getQuadro7RegulatorioRows,
 } from '../../src/utils/opinionCalculations';
 
 const TableCellPreview = ({
@@ -80,7 +80,10 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
     ? `De acordo com o Art. 6º da Resolução CNRH Nº 241/2024, as barragens são classificadas quanto ao volume total do reservatório. Conforme informações apresentadas pelo empreendedor, a Barragem é classificada, quanto ao Volume, como ‘${volNomenclature}’`
     : 'Volume armazenado (NMM) pendente para classificação quanto ao volume.';
 
-  const dpaText = `Conforme Art. 4º da Resolução CNRH Nº 241, de 10 de setembro de 2024, a classificação por Categoria de Dano Potencial Associado (DPA) da barragem tem por objetivo classificar as barragens em função do potencial de danos humanos, sociais, econômicos e ambientais decorrentes de eventual ruptura, vazamento, infiltração no solo ou mau funcionamento da barragem, devendo ser considerado o cenário de pior caso. ${formData.classificacao.rupturaTexto}`;
+  const rupturaSuffix = formData.classificacao.rupturaTexto?.trim()
+    ? ` ${formData.classificacao.rupturaTexto.trim()}`
+    : '';
+  const dpaText = `Conforme Art. 4º da Resolução CNRH Nº 241, de 10 de setembro de 2024, a classificação por Categoria de Dano Potencial Associado (DPA) da barragem tem por objetivo classificar as barragens em função do potencial de danos humanos, sociais, econômicos e ambientais decorrentes de eventual ruptura, vazamento, infiltração no solo ou mau funcionamento da barragem, devendo ser considerado o cenário de pior caso.${rupturaSuffix}`;
 
   const criText = `Segundo o Art. 7º da Resolução CNRH Nº 241/2024, a Categoria de Risco (CRI) refere-se aos aspectos da própria barragem que possam influenciar na probabilidade de ocorrência de acidente, sendo classificada em função das características técnicas, do estado de conservação do empreendimento e do plano de segurança da barragem. Abaixo se encontra a classificação do barramento quanto à categoria de risco embasada na Resolução:`;
 
@@ -325,11 +328,11 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
     );
   };
 
-  const quadro6Rows =
+  const quadro7Rows =
     !derived.isPreClassificacao &&
     derived.resultado.isComplete &&
     derived.pnsb.enquadrada === true
-      ? getQuadro6RegulatorioRows(derived.resultado.label)
+      ? getQuadro7RegulatorioRows(derived.resultado.label)
       : [];
 
   const agePreview = evaluateCt5Age(formData.barragemPrincipal.idade);
@@ -765,7 +768,7 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
                   </table>
 
                   <p className="text-center text-xs font-bold mb-1 mt-4">
-                    Quadro 4. Plano de Segurança (PS)
+                    Quadro 4. Plano de Segurança da Barragem (PSB)
                   </p>
                   <table className="w-full border-collapse border border-black text-xs mb-2">
                     <thead className="bg-gray-100">
@@ -818,7 +821,7 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
                         </tr>
                       ))}
                       <tr>
-                        <TableCellPreview value="TOTAL PS" bold />
+                        <TableCellPreview value="TOTAL PSB" bold />
                         <TableCellPreview value="" />
                         <TableCellPreview
                           value={cri.totalPS !== null ? cri.totalPS : 'Pendente'}
@@ -879,15 +882,15 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
                   <table className="w-full border-collapse border border-black text-xs mb-2">
                     <tbody>
                       <tr className={cri.riskGeral === RiscoEnum.ALTO ? 'bg-amber-100' : ''}>
-                        <td className="border border-black px-2 py-1">CT + EC + PS &gt;= 65</td>
+                        <td className="border border-black px-2 py-1">CT + EC + PSB &gt;= 65</td>
                         <td className="border border-black px-2 py-1">ALTO</td>
                       </tr>
                       <tr className={cri.riskGeral === RiscoEnum.MEDIO ? 'bg-amber-100' : ''}>
-                        <td className="border border-black px-2 py-1">35 &lt; CT + EC + PS &lt; 65</td>
+                        <td className="border border-black px-2 py-1">35 &lt; CT + EC + PSB &lt; 65</td>
                         <td className="border border-black px-2 py-1">MÉDIO</td>
                       </tr>
                       <tr className={cri.riskGeral === RiscoEnum.BAIXO ? 'bg-amber-100' : ''}>
-                        <td className="border border-black px-2 py-1">CT + EC + PS &lt;= 35</td>
+                        <td className="border border-black px-2 py-1">CT + EC + PSB &lt;= 35</td>
                         <td className="border border-black px-2 py-1">BAIXO</td>
                       </tr>
                       <tr className="bg-gray-100">
@@ -960,15 +963,15 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
                   <table className="w-full border-collapse border border-black text-xs mb-2">
                     <tbody>
                       <tr className={cri.riskGerencial === RiscoEnum.ALTO ? 'bg-amber-100' : ''}>
-                        <td className="border border-black px-2 py-1">PS &gt;= 24</td>
+                        <td className="border border-black px-2 py-1">PSB &gt;= 24</td>
                         <td className="border border-black px-2 py-1">ALTO</td>
                       </tr>
                       <tr className={cri.riskGerencial === RiscoEnum.MEDIO ? 'bg-amber-100' : ''}>
-                        <td className="border border-black px-2 py-1">13 &lt; PS &lt; 24</td>
+                        <td className="border border-black px-2 py-1">13 &lt; PSB &lt; 24</td>
                         <td className="border border-black px-2 py-1">MÉDIO</td>
                       </tr>
                       <tr className={cri.riskGerencial === RiscoEnum.BAIXO ? 'bg-amber-100' : ''}>
-                        <td className="border border-black px-2 py-1">PS &lt;= 13</td>
+                        <td className="border border-black px-2 py-1">PSB &lt;= 13</td>
                         <td className="border border-black px-2 py-1">BAIXO</td>
                       </tr>
                       <tr className="bg-gray-100">
@@ -1080,13 +1083,13 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
               <h2 className="font-bold mb-2 uppercase mt-8">5. PARECER TÉCNICO CONCLUSIVO</h2>
               <p className="text-justify whitespace-pre-wrap">{formData.parecer_final}</p>
 
-              {quadro6Rows.length > 0 && (
+              {quadro7Rows.length > 0 && (
                 <div className="mt-6">
                   <h3 className="font-bold mb-2 uppercase">
                     5.1 CONDICIONANTES E CONSEQUÊNCIAS REGULATÓRIAS
                   </h3>
                   <p className="mb-4 text-justify">
-                    As consequências regulatórias da {classif} são definidas pela legislação vigente e estão discriminadas no quadro abaixo:
+                    As consequências regulatórias da {classif} são definidas pela legislação vigente e estão discriminadas no Quadro 7 abaixo:
                   </p>
                   <p className="text-center text-xs font-bold mb-1">
                     Quadro 7. Consequências regulatórias.
@@ -1103,7 +1106,7 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
                       </tr>
                     </thead>
                     <tbody>
-                      {quadro6Rows.map((row, idx) => (
+                      {quadro7Rows.map((row, idx) => (
                         <tr key={idx}>
                           {row.col2 === '' ? (
                             <td

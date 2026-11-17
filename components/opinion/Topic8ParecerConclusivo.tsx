@@ -4,7 +4,7 @@ import {
   ConclusaoCategoria,
   DerivedClassificationResult,
   TEXTO_APROVADO_NAO_ENQUADRAMENTO_PNSB,
-  getQuadro6RegulatorioRows,
+  getQuadro7RegulatorioRows,
 } from '../../src/utils/opinionCalculations';
 
 interface Topic8ParecerConclusivoProps {
@@ -45,7 +45,7 @@ export const Topic8ParecerConclusivo: React.FC<Topic8ParecerConclusivoProps> = (
     !derived.isPreClassificacao &&
     derived.resultado.isComplete &&
     derived.pnsb.enquadrada === true
-      ? getQuadro6RegulatorioRows(derived.resultado.label)
+      ? getQuadro7RegulatorioRows(derived.resultado.label)
       : [];
 
   return (
@@ -181,7 +181,10 @@ export const Topic8ParecerConclusivo: React.FC<Topic8ParecerConclusivoProps> = (
                   5.1 CONDICIONANTES E CONSEQUÊNCIAS REGULATÓRIAS
                 </h3>
                 <p className="text-xs text-slate-600 mb-3">
-                  As consequências regulatórias da {tipoClassificacaoLabel || 'classificação'} são definidas pela legislação vigente e estão discriminadas no quadro abaixo:
+                  As consequências regulatórias da {tipoClassificacaoLabel || 'classificação'} são definidas pela legislação vigente e estão discriminadas no Quadro 7 abaixo:
+                </p>
+                <p className="text-center text-xs font-bold text-slate-700 mb-1">
+                  Quadro 7. Consequências regulatórias.
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse border border-slate-300 text-xs">

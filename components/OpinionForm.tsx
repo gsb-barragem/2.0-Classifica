@@ -104,7 +104,7 @@ const createEmptyBarramento = (id: string, nomePadrao = ''): BarramentoData => (
   tipoEstrutural: '',
   tipoFundacao: '',
   idade: '',
-  scoreIdade: 0,
+  scoreIdade: null,
   cotaNNO: '',
   cotaNMM: '',
   areaNNO: '',
@@ -205,60 +205,60 @@ const INITIAL_DATA: ParecerData = {
     dpa2Select: '',
     dpa3Select: '',
     dpa4Select: '',
-    scoreDpa1: 0,
-    scoreDpa2: 0,
-    scoreDpa3: 0,
-    scoreDpa4: 0,
-    totalDpa: 0,
+    scoreDpa1: null as unknown as number,
+    scoreDpa2: null as unknown as number,
+    scoreDpa3: null as unknown as number,
+    scoreDpa4: null as unknown as number,
+    totalDpa: null as unknown as number,
     dpaClass: '' as DanoEnum,
-    rupturaTexto: 'Os estudos de ruptura hipotética consideraram...',
+    rupturaTexto: '',
     legendaDPA:
       '*Classificação do DPA (Dano Potencial Associado) conforme as Faixas de Classificação estabelecidas no item II.4, do Anexo II, da Resolução CNRH Nº 241, de 10 de setembro de 2024',
 
     criPreClassificacao: false,
-    scoreCt1: 0,
-    scoreCt2: 0,
-    scoreCt3: 0,
-    scoreCt4: 0,
-    scoreCt5: 0,
+    scoreCt1: null as unknown as number,
+    scoreCt2: null as unknown as number,
+    scoreCt3: null as unknown as number,
+    scoreCt4: null as unknown as number,
+    scoreCt5: null as unknown as number,
     ct6Select: '',
-    scoreCt6: 0,
+    scoreCt6: null as unknown as number,
 
     ec1Select: '',
-    scoreEc1: 0,
+    scoreEc1: null as unknown as number,
     ec2Select: '',
-    scoreEc2: 0,
+    scoreEc2: null as unknown as number,
     ec3Select: '',
-    scoreEc3: 0,
+    scoreEc3: null as unknown as number,
     ec4Select: '',
-    scoreEc4: 0,
+    scoreEc4: null as unknown as number,
     ec5Select: '',
-    scoreEc5: 0,
+    scoreEc5: null as unknown as number,
 
     ps1Select: '',
-    scorePs1: 0,
+    scorePs1: null as unknown as number,
     ps2Select: '',
-    scorePs2: 0,
+    scorePs2: null as unknown as number,
     ps3Select: '',
-    scorePs3: 0,
+    scorePs3: null as unknown as number,
     ps4Select: '',
-    scorePs4: 0,
+    scorePs4: null as unknown as number,
     ps5Select: '',
-    scorePs5: 0,
+    scorePs5: null as unknown as number,
     ps6Select: '',
-    scorePs6: 0,
+    scorePs6: null as unknown as number,
 
-    totalCT: 0,
-    totalEC: 0,
-    totalPS: 0,
+    totalCT: null as unknown as number,
+    totalEC: null as unknown as number,
+    totalPS: null as unknown as number,
     riskGeral: '' as RiscoEnum,
-    valGeral: 0,
+    valGeral: null as unknown as number,
     riskPercolacao: '' as RiscoEnum,
-    valPercolacao: 0,
+    valPercolacao: null as unknown as number,
     riskGalgamento: '' as RiscoEnum,
-    valGalgamento: 0,
+    valGalgamento: null as unknown as number,
     riskGerencial: '' as RiscoEnum,
-    valGerencial: 0,
+    valGerencial: null as unknown as number,
 
     risco: '' as RiscoEnum,
     resumo: 'PENDENTE — DADOS NECESSÁRIOS PARA CLASSIFICAÇÃO',
@@ -686,7 +686,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     setFormData((prev) => {
       const additionalUpdates: Partial<BarramentoData> =
         field === 'idade'
-          ? { scoreIdade: evaluateCt5Age(value).score ?? 0 }
+          ? { scoreIdade: evaluateCt5Age(value).score }
           : {};
 
       if (isMain) {
@@ -798,61 +798,118 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     }));
   };
 
-  // Snapshot compatível com persistência e DOCX existente sem armazenar CRI em pré-classificação
+  // Snapshot compatível com persistência e DOCX existente sem converter pendências em 0 nem armazenar CRI em pré-classificação
   const buildCompatSnapshot = (): ParecerData => {
     const cls = formData.classificacao;
     const isPre = derived.isPreClassificacao;
+    const nullableScore = (value: number | null | undefined): number =>
+      (value ?? null) as unknown as number;
 
     return {
       ...formData,
+      barragemPrincipal: {
+        ...formData.barragemPrincipal,
+        scoreIdade: evaluateCt5Age(formData.barragemPrincipal.idade).score,
+      },
+      barragensMontante: (formData.barragensMontante || []).map((bm) => ({
+        ...bm,
+        scoreIdade: evaluateCt5Age(bm.idade).score,
+      })),
       classificacao: {
         ...cls,
         criPreClassificacao: isPre,
         dpa1Select: derived.dpa.dpa1?.selectValue || '',
-        scoreDpa1: derived.dpa.scoreDpa1 ?? 0,
-        scoreDpa2: derived.dpa.scoreDpa2 ?? 0,
-        scoreDpa3: derived.dpa.scoreDpa3 ?? 0,
-        scoreDpa4: derived.dpa.scoreDpa4 ?? 0,
-        totalDpa: derived.dpa.totalDpa ?? 0,
+        scoreDpa1: nullableScore(derived.dpa.scoreDpa1),
+        scoreDpa2: nullableScore(derived.dpa.scoreDpa2),
+        scoreDpa3: nullableScore(derived.dpa.scoreDpa3),
+        scoreDpa4: nullableScore(derived.dpa.scoreDpa4),
+        totalDpa: nullableScore(derived.dpa.totalDpa),
         dpaClass: (derived.dpa.dpaClass || '') as DanoEnum,
         ...(isPre
           ? {
+              scoreCt1: nullableScore(null),
+              scoreCt2: nullableScore(null),
+              scoreCt3: nullableScore(null),
+              scoreCt4: nullableScore(null),
+              scoreCt5: nullableScore(null),
+              scoreCt6: nullableScore(null),
+              scoreEc1: nullableScore(null),
+              scoreEc2: nullableScore(null),
+              scoreEc3: nullableScore(null),
+              scoreEc4: nullableScore(null),
+              scoreEc5: nullableScore(null),
+              scorePs1: nullableScore(null),
+              scorePs2: nullableScore(null),
+              scorePs3: nullableScore(null),
+              scorePs4: nullableScore(null),
+              scorePs5: nullableScore(null),
+              scorePs6: nullableScore(null),
+              totalCT: nullableScore(null),
+              totalEC: nullableScore(null),
+              totalPS: nullableScore(null),
+              valGeral: nullableScore(null),
+              riskGeral: '' as RiscoEnum,
+              valPercolacao: nullableScore(null),
+              riskPercolacao: '' as RiscoEnum,
+              valGalgamento: nullableScore(null),
+              riskGalgamento: '' as RiscoEnum,
+              valGerencial: nullableScore(null),
+              riskGerencial: '' as RiscoEnum,
+              risco: '' as RiscoEnum,
               resumo: derived.resultado.label,
             }
           : {
-              scoreCt1: derived.cri?.scoreCt1 ?? 0,
-              scoreCt2: derived.cri?.scoreCt2 ?? 0,
-              scoreCt3: derived.cri?.scoreCt3 ?? 0,
-              scoreCt4: derived.cri?.scoreCt4 ?? 0,
-              scoreCt5: derived.cri?.scoreCt5 ?? 0,
-              scoreCt6: derived.cri?.scoreCt6 ?? 0,
-              scoreEc1: derived.cri?.scoreEc1 ?? 0,
-              scoreEc2: derived.cri?.scoreEc2 ?? 0,
-              scoreEc3: derived.cri?.scoreEc3 ?? 0,
-              scoreEc4: derived.cri?.scoreEc4 ?? 0,
-              scoreEc5: derived.cri?.scoreEc5 ?? 0,
-              scorePs1: derived.cri?.scorePs1 ?? 0,
-              scorePs2: derived.cri?.scorePs2 ?? 0,
-              scorePs3: derived.cri?.scorePs3 ?? 0,
-              scorePs4: derived.cri?.scorePs4 ?? 0,
-              scorePs5: derived.cri?.scorePs5 ?? 0,
-              scorePs6: derived.cri?.scorePs6 ?? 0,
-              totalCT: derived.cri?.totalCT ?? 0,
-              totalEC: derived.cri?.totalEC ?? 0,
-              totalPS: derived.cri?.totalPS ?? 0,
-              valGeral: derived.cri?.valGeral ?? 0,
+              scoreCt1: nullableScore(derived.cri?.scoreCt1),
+              scoreCt2: nullableScore(derived.cri?.scoreCt2),
+              scoreCt3: nullableScore(derived.cri?.scoreCt3),
+              scoreCt4: nullableScore(derived.cri?.scoreCt4),
+              scoreCt5: nullableScore(derived.cri?.scoreCt5),
+              scoreCt6: nullableScore(derived.cri?.scoreCt6),
+              scoreEc1: nullableScore(derived.cri?.scoreEc1),
+              scoreEc2: nullableScore(derived.cri?.scoreEc2),
+              scoreEc3: nullableScore(derived.cri?.scoreEc3),
+              scoreEc4: nullableScore(derived.cri?.scoreEc4),
+              scoreEc5: nullableScore(derived.cri?.scoreEc5),
+              scorePs1: nullableScore(derived.cri?.scorePs1),
+              scorePs2: nullableScore(derived.cri?.scorePs2),
+              scorePs3: nullableScore(derived.cri?.scorePs3),
+              scorePs4: nullableScore(derived.cri?.scorePs4),
+              scorePs5: nullableScore(derived.cri?.scorePs5),
+              scorePs6: nullableScore(derived.cri?.scorePs6),
+              totalCT: nullableScore(derived.cri?.totalCT),
+              totalEC: nullableScore(derived.cri?.totalEC),
+              totalPS: nullableScore(derived.cri?.totalPS),
+              valGeral: nullableScore(derived.cri?.valGeral),
               riskGeral: (derived.cri?.riskGeral || '') as RiscoEnum,
-              valPercolacao: derived.cri?.valPercolacao ?? 0,
+              valPercolacao: nullableScore(derived.cri?.valPercolacao),
               riskPercolacao: (derived.cri?.riskPercolacao || '') as RiscoEnum,
-              valGalgamento: derived.cri?.valGalgamento ?? 0,
+              valGalgamento: nullableScore(derived.cri?.valGalgamento),
               riskGalgamento: (derived.cri?.riskGalgamento || '') as RiscoEnum,
-              valGerencial: derived.cri?.valGerencial ?? 0,
+              valGerencial: nullableScore(derived.cri?.valGerencial),
               riskGerencial: (derived.cri?.riskGerencial || '') as RiscoEnum,
               risco: (derived.cri?.risco || '') as RiscoEnum,
               resumo: derived.resultado.label,
             }),
       },
     };
+  };
+
+  const getConclusaoPendencias = (): string[] => {
+    const missingUpstreamRelations = (formData.barragensMontante || [])
+      .map((bm, i) =>
+        !bm.relacaoBarragemPrincipal
+          ? `Relação com a barragem principal (${bm.nome || `Barragem a Montante ${i + 1}`})`
+          : null
+      )
+      .filter((v): v is string => Boolean(v));
+
+    if (derived.resultado.isComplete && missingUpstreamRelations.length === 0) {
+      return [];
+    }
+
+    return Array.from(
+      new Set([...derived.resultado.pendingFields, ...missingUpstreamRelations])
+    );
   };
 
   const handleGenerateDoc = async () => {
@@ -885,6 +942,18 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         'Por favor, preencha todos os campos obrigatórios (Protocolo, Empreendedor e Município).'
       );
       return;
+    }
+
+    if (status === 'Concluído') {
+      const pendencias = getConclusaoPendencias();
+      if (!derived.resultado.isComplete || pendencias.length > 0) {
+        const resumoPendencias =
+          pendencias.length > 0
+            ? pendencias.join('; ')
+            : 'Cálculo de classificação incompleto.';
+        toast.error(`Não é possível concluir o parecer com pendências: ${resumoPendencias}`);
+        return;
+      }
     }
 
     setIsSaving(true);
@@ -1320,6 +1389,16 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
   };
 
   const handleSaveComplete = () => {
+    const pendencias = getConclusaoPendencias();
+    if (!derived.resultado.isComplete || pendencias.length > 0) {
+      const resumoPendencias =
+        pendencias.length > 0
+          ? pendencias.join('; ')
+          : 'Cálculo de classificação incompleto.';
+      toast.error(`Não é possível concluir o parecer com pendências: ${resumoPendencias}`);
+      return;
+    }
+
     setConfirmModal({
       isOpen: true,
       title: 'Finalizar Parecer',

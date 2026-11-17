@@ -51,7 +51,7 @@ export interface ClassificacaoData {
   ec4Select: string; scoreEc4: number;
   ec5Select: string; scoreEc5: number;
 
-  // Plano de Seguranca (PS)
+  // Plano de Seguranca (PSB)
   ps1Select: string; scorePs1: number;
   ps2Select: string; scorePs2: number;
   ps3Select: string; scorePs3: number;
@@ -120,7 +120,7 @@ export interface BarramentoData {
   tipoFundacao: string;
   
   idade: string;
-  scoreIdade: number;
+  scoreIdade: number | null;
 
   // Reservatório
   cotaNNO: string;

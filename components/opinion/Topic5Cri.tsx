@@ -180,7 +180,7 @@ export const Topic5Cri: React.FC<Topic5CriProps> = ({
                 CLASSIFICAÇÃO QUANTO À CRI
               </h2>
               <p className="text-xs text-slate-500">
-                Características Técnicas (CT), Estado de Conservação (EC), Plano de Segurança (PS) e indicadores de risco
+                Características Técnicas (CT), Estado de Conservação (EC), Plano de Segurança da Barragem (PSB) e indicadores de risco
               </p>
             </div>
           </div>
@@ -317,10 +317,10 @@ export const Topic5Cri: React.FC<Topic5CriProps> = ({
                 </div>
               </div>
 
-              {/* PS */}
+              {/* PSB */}
               <div>
                 <h4 className="text-xs font-bold text-slate-600 border-b border-amber-200 pb-1 mb-3">
-                  Plano de Segurança (PS) — Total PS:{' '}
+                  Plano de Segurança da Barragem (PSB) — Total PSB:{' '}
                   {derivedCri.totalPS !== null ? derivedCri.totalPS : 'Pendente'}
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -452,10 +452,10 @@ export const Topic5Cri: React.FC<Topic5CriProps> = ({
                 </table>
               </div>
 
-              {/* Quadro 4 PS */}
+              {/* Quadro 4 PSB */}
               <div className="overflow-x-auto">
                 <p className="text-center text-xs font-bold text-slate-700 mb-1">
-                  Quadro 4. Plano de Segurança (PS)
+                  Quadro 4. Plano de Segurança da Barragem (PSB)
                 </p>
                 <table className="w-full border-collapse border border-slate-300 text-xs">
                   <thead className="bg-slate-100">
@@ -476,7 +476,7 @@ export const Topic5Cri: React.FC<Topic5CriProps> = ({
                       </tr>
                     ))}
                     <tr className="bg-slate-100 font-bold">
-                      <td className="border border-slate-300 p-2">TOTAL PS</td>
+                      <td className="border border-slate-300 p-2">TOTAL PSB</td>
                       <td className="border border-slate-300 p-2" />
                       <td className="border border-slate-300 p-2 text-center">
                         {renderScore(derivedCri.totalPS)}
@@ -498,15 +498,15 @@ export const Topic5Cri: React.FC<Topic5CriProps> = ({
                       </td>
                     </tr>
                     <tr className={derivedCri.riskGeral === RiscoEnum.ALTO ? 'bg-amber-100 font-semibold' : ''}>
-                      <td className="border border-slate-300 p-1.5">CT + EC + PS &gt;= 65</td>
+                      <td className="border border-slate-300 p-1.5">CT + EC + PSB &gt;= 65</td>
                       <td className="border border-slate-300 p-1.5 w-24">ALTO</td>
                     </tr>
                     <tr className={derivedCri.riskGeral === RiscoEnum.MEDIO ? 'bg-amber-100 font-semibold' : ''}>
-                      <td className="border border-slate-300 p-1.5">35 &lt; CT + EC + PS &lt; 65</td>
+                      <td className="border border-slate-300 p-1.5">35 &lt; CT + EC + PSB &lt; 65</td>
                       <td className="border border-slate-300 p-1.5">MÉDIO</td>
                     </tr>
                     <tr className={derivedCri.riskGeral === RiscoEnum.BAIXO ? 'bg-amber-100 font-semibold' : ''}>
-                      <td className="border border-slate-300 p-1.5">CT + EC + PS &lt;= 35</td>
+                      <td className="border border-slate-300 p-1.5">CT + EC + PSB &lt;= 35</td>
                       <td className="border border-slate-300 p-1.5">BAIXO</td>
                     </tr>
                     <tr className="bg-slate-50">
@@ -627,7 +627,7 @@ export const Topic5Cri: React.FC<Topic5CriProps> = ({
                     <tr className="bg-slate-100">
                       <td colSpan={2} className="border border-slate-300 p-2 font-bold">
                         Quadro 5.5 — INDICADOR DE RISCO GERENCIAL{' '}
-                        {derivedCri.valGerencial !== null ? `(Total PS: ${derivedCri.valGerencial})` : ''}
+                        {derivedCri.valGerencial !== null ? `(Total PSB: ${derivedCri.valGerencial})` : ''}
                       </td>
                     </tr>
                     <tr
@@ -637,7 +637,7 @@ export const Topic5Cri: React.FC<Topic5CriProps> = ({
                           : ''
                       }
                     >
-                      <td className="border border-slate-300 p-1.5">PS &gt;= 24</td>
+                      <td className="border border-slate-300 p-1.5">PSB &gt;= 24</td>
                       <td className="border border-slate-300 p-1.5 w-24">ALTO</td>
                     </tr>
                     <tr
@@ -647,7 +647,7 @@ export const Topic5Cri: React.FC<Topic5CriProps> = ({
                           : ''
                       }
                     >
-                      <td className="border border-slate-300 p-1.5">13 &lt; PS &lt; 24</td>
+                      <td className="border border-slate-300 p-1.5">13 &lt; PSB &lt; 24</td>
                       <td className="border border-slate-300 p-1.5">MÉDIO</td>
                     </tr>
                     <tr
@@ -657,7 +657,7 @@ export const Topic5Cri: React.FC<Topic5CriProps> = ({
                           : ''
                       }
                     >
-                      <td className="border border-slate-300 p-1.5">PS &lt;= 13</td>
+                      <td className="border border-slate-300 p-1.5">PSB &lt;= 13</td>
                       <td className="border border-slate-300 p-1.5">BAIXO</td>
                     </tr>
                     <tr className="bg-slate-50">

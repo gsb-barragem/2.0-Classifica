@@ -174,6 +174,7 @@ export const Topic4Dpa: React.FC<Topic4DpaProps> = ({
                     rows={3}
                     value={classificacao.rupturaTexto}
                     onChange={(e) => onClassificationChange('rupturaTexto', e.target.value)}
+                    placeholder="Os estudos de ruptura hipotética consideraram..."
                     className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-3 md:p-2 text-sm md:text-xs focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none"
                   />
                 </div>

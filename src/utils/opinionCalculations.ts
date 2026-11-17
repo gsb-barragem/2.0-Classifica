@@ -170,7 +170,7 @@ export const getDpa1FromVolumeValue = (vol: number | null): DerivedDpa1Result | 
   if (vol <= 3) {
     return {
       selectValue: OPS_DPA1_VOLUME[0],
-      faixaLabel: 'Até 3 hm³, inclusive — Muito pequeno (1 ponto)',
+      faixaLabel: 'Muito pequeno – ≤ 3 hm³ (1 ponto)',
       nomenclatura: 'muito pequeno',
       score: 1,
     };
@@ -178,7 +178,7 @@ export const getDpa1FromVolumeValue = (vol: number | null): DerivedDpa1Result | 
   if (vol <= 10) {
     return {
       selectValue: OPS_DPA1_VOLUME[1],
-      faixaLabel: 'Acima de 3 e até 10 hm³, inclusive — Pequeno (2 pontos)',
+      faixaLabel: 'Pequeno – > 3 a 10 hm³ (2 pontos)',
       nomenclatura: 'pequeno',
       score: 2,
     };
@@ -186,7 +186,7 @@ export const getDpa1FromVolumeValue = (vol: number | null): DerivedDpa1Result | 
   if (vol <= 75) {
     return {
       selectValue: OPS_DPA1_VOLUME[2],
-      faixaLabel: 'Acima de 10 e até 75 hm³, inclusive — Médio (3 pontos)',
+      faixaLabel: 'Médio – > 10 a 75 hm³ (3 pontos)',
       nomenclatura: 'médio',
       score: 3,
     };
@@ -194,14 +194,14 @@ export const getDpa1FromVolumeValue = (vol: number | null): DerivedDpa1Result | 
   if (vol <= 200) {
     return {
       selectValue: OPS_DPA1_VOLUME[3],
-      faixaLabel: 'Acima de 75 e até 200 hm³, inclusive — Grande (4 pontos)',
+      faixaLabel: 'Grande – > 75 a 200 hm³ (4 pontos)',
       nomenclatura: 'grande',
       score: 4,
     };
   }
   return {
     selectValue: OPS_DPA1_VOLUME[4],
-    faixaLabel: 'Acima de 200 hm³ — Muito grande (5 pontos)',
+    faixaLabel: 'Muito grande – > 200 hm³ (5 pontos)',
     nomenclatura: 'muito grande',
     score: 5,
   };
@@ -210,7 +210,7 @@ export const getDpa1FromVolumeValue = (vol: number | null): DerivedDpa1Result | 
 export const getCt1FromHeight = (altura: number | null): number | null => {
   if (altura === null || !Number.isFinite(altura) || altura < 0) return null;
   if (altura < 15) return 0;
-  if (altura < 30) return 3;
+  if (altura <= 30) return 3;
   if (altura <= 60) return 4;
   return 5;
 };
@@ -351,35 +351,46 @@ export const deriveClassification = (formData: ParecerData): DerivedClassificati
     pendingFields: dpaPending,
   };
 
-  // --- PNSB (depends on alturaMaxima, volumeNMM, and DPA) ---
+  // --- PNSB (critérios alternativos OU: altura >= 15 m, volume NMM >= 3 hm³, DPA Médio/Alto) ---
   const alturaValida = parseNumericBr(bar?.alturaMaxima);
-  const pnsbPending: string[] = [];
-  if (alturaValida === null || alturaValida < 0) {
-    pnsbPending.push('Altura máxima projetada (m)');
-  }
-  if (volumeNmmValido === null || volumeNmmValido < 0) {
-    pnsbPending.push('Volume armazenado no NMM (hm³)');
-  }
-  if (!isDpaComplete || !dpaClass) {
-    pnsbPending.push('Classificação completa do DPA');
-  }
+  const alturaAvaliada = alturaValida !== null && alturaValida >= 0;
+  const volumeAvaliado = volumeNmmValido !== null && volumeNmmValido >= 0;
+  const dpaAvaliado = isDpaComplete && dpaClass !== null;
 
   const criteriosAtendidos: string[] = [];
-  if (alturaValida !== null && alturaValida >= 15) {
-    criteriosAtendidos.push('Altura do maciço ≥ 15 m (Art. 1º, parágrafo único, I)');
+  if (alturaAvaliada && alturaValida >= 15) {
+    criteriosAtendidos.push('Altura do maciço ≥ 15 m (art. 1º, parágrafo único)');
   }
-  if (volumeNmmValido !== null && volumeNmmValido >= 3) {
-    criteriosAtendidos.push('Volume total do reservatório ≥ 3 hm³ (Art. 1º, parágrafo único, II)');
+  if (volumeAvaliado && volumeNmmValido >= 3) {
+    criteriosAtendidos.push('Volume total do reservatório (NMM) ≥ 3 hm³ (art. 1º, parágrafo único)');
   }
-  if (dpaClass === DanoEnum.MEDIO || dpaClass === DanoEnum.ALTO) {
-    criteriosAtendidos.push(`Dano Potencial Associado ${dpaClass} (Art. 1º, parágrafo único, IV)`);
+  if (dpaAvaliado && (dpaClass === DanoEnum.MEDIO || dpaClass === DanoEnum.ALTO)) {
+    criteriosAtendidos.push(`Dano Potencial Associado ${dpaClass} (art. 1º, parágrafo único)`);
   }
 
+  let pnsbPending: string[] = [];
   let pnsbStatus: 'enquadrada' | 'nao_enquadrada' | 'pendente' = 'pendente';
   let enquadrada: boolean | null = null;
-  if (pnsbPending.length === 0) {
-    enquadrada = criteriosAtendidos.length > 0;
-    pnsbStatus = enquadrada ? 'enquadrada' : 'nao_enquadrada';
+
+  if (criteriosAtendidos.length > 0) {
+    enquadrada = true;
+    pnsbStatus = 'enquadrada';
+    pnsbPending = [];
+  } else {
+    if (!alturaAvaliada) {
+      pnsbPending.push('Altura máxima projetada (m)');
+    }
+    if (!volumeAvaliado) {
+      pnsbPending.push('Volume armazenado no NMM (hm³)');
+    }
+    if (!dpaAvaliado) {
+      pnsbPending.push('Classificação completa do DPA');
+    }
+
+    if (pnsbPending.length === 0) {
+      enquadrada = false;
+      pnsbStatus = 'nao_enquadrada';
+    }
   }
 
   const pnsb: DerivedPnsbResult = {
@@ -762,21 +773,46 @@ Este Parecer apresenta os resultados da análise do pedido de ${classif || '...'
 Este documento encontra embasamento na análise dos documentos disponibilizados nos autos, contendo em referência à análise documental:`;
 };
 
+const formatListaCriterios = (items: string[]): string => {
+  if (items.length === 0) return '';
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} e ${items[1]}`;
+  return `${items.slice(0, -1).join('; ')}; e ${items[items.length - 1]}`;
+};
+
 const getEnquadramentoDetailText = (
   dpaClass: DanoEnum,
-  altura: number,
-  volume: number
+  altura: number | null,
+  volume: number | null
 ): string => {
+  const criterios: string[] = [];
+
+  if (altura !== null && altura >= 15) {
+    criterios.push(
+      'altura do maciço, medida do encontro do pé do talude de jusante com o nível do solo até a crista de coroamento do barramento, maior ou igual a 15 (quinze) metros'
+    );
+  }
+  if (volume !== null && volume >= 3) {
+    criterios.push(
+      'capacidade total do reservatório maior ou igual a 3.000.000 m³ (três milhões de metros cúbicos)'
+    );
+  }
   if (dpaClass === DanoEnum.MEDIO || dpaClass === DanoEnum.ALTO) {
-    return `apresenta características que a enquadram na Política Nacional de Segurança de Barragens, conforme a Lei nº 12.334/2010, atualizada pela Lei nº 14.066/2020, nos termos do art. 1º, parágrafo único, inciso IV, que estabelece como critério de inclusão a categoria de dano potencial associado médio ou alto, em termos econômicos, sociais, ambientais ou de perda de vidas humanas.\nDessa forma, deverá ser elaborado o Plano de Segurança da Barragem (PSB), estruturado nos Volumes I, II, III, IV, V e VI, devendo conter, no mínimo, as informações previstas no Anexo II – Conteúdo Mínimo e Nível de Detalhamento do PSB, em conformidade com os critérios estabelecidos pela Resolução CEHIDRO nº 163, de 11 de maio de 2023. Ademais, a elaboração deverá observar as condicionantes estabelecidas no item 5.1 do presente parecer.`;
+    criterios.push(
+      `categoria de dano potencial associado ${dpaClass.toLowerCase()}, em termos econômicos, sociais, ambientais ou de perda de vidas humanas`
+    );
   }
-  if (altura >= 15) {
-    return `apresenta características que a enquadram na Política Nacional de Segurança de Barragens, conforme a Lei nº 12.334/2010, atualizada pela Lei nº 14.066/2020, nos termos do art. 1º, parágrafo único, inciso I, que estabelece como critério de inclusão a altura do maciço, medida do encontro do pé do talude de jusante com o nível do solo até a crista de coroamento do barramento, maior ou igual a 15 (quinze) metros.\nDessa forma, deverá ser elaborado o Plano de Segurança da Barragem (PSB), estruturado nos Volumes I, II, III, IV, V e VI, devendo conter, no mínimo, as informações previstas no Anexo II – Conteúdo Mínimo e Nível de Detalhamento do PSB, em conformidade com os critérios estabelecidos pela Resolução CEHIDRO nº 163, de 11 de maio de 2023. Ademais, a elaboração deverá observar as condicionantes estabelecidas no item 5.1 do presente parecer.`;
+
+  if (criterios.length === 0) {
+    return `não apresenta características que a enquadrem na Política Nacional de Segurança de Barragens, conforme a Lei nº 12.334/2010 e a Lei nº 14.066/2020.`;
   }
-  if (volume >= 3) {
-    return `apresenta características que a enquadram na Política Nacional de Segurança de Barragens, conforme a Lei nº 12.334/2010, atualizada pela Lei nº 14.066/2020, nos termos do art. 1º, parágrafo único, inciso II, que estabelece como critério de inclusão a capacidade total do reservatório maior ou igual a 3.000.000 m³ (três milhões de metros cúbicos).\nDessa forma, deverá ser elaborado o Plano de Segurança da Barragem (PSB), estruturado nos Volumes I, II, III, IV, V e VI, devendo conter, no mínimo, as informações previstas no Anexo II – Conteúdo Mínimo e Nível de Detalhamento do PSB, em conformidade com os critérios estabelecidos pela Resolução CEHIDRO nº 163, de 11 de maio de 2023. Ademais, a elaboração deverá observar as condicionantes estabelecidas no item 5.1 do presente parecer.`;
-  }
-  return `não apresenta características que a enquadrem na Política Nacional de Segurança de Barragens, conforme a Lei nº 12.334/2010 e a Lei nº 14.066/2020.`;
+
+  const criterioIntro =
+    criterios.length === 1
+      ? `como critério de inclusão ${criterios[0]}`
+      : `como critérios de inclusão: ${formatListaCriterios(criterios)}`;
+
+  return `apresenta características que a enquadram na Política Nacional de Segurança de Barragens, conforme a Lei nº 12.334/2010, atualizada pela Lei nº 14.066/2020, nos termos do art. 1º, parágrafo único, que estabelece ${criterioIntro}.\nDessa forma, deverá ser elaborado o Plano de Segurança da Barragem (PSB), estruturado nos Volumes I, II, III, IV, V e VI, devendo conter, no mínimo, as informações previstas no Anexo II – Conteúdo Mínimo e Nível de Detalhamento do PSB, em conformidade com os critérios estabelecidos pela Resolução CEHIDRO nº 163, de 11 de maio de 2023. Ademais, a elaboração deverá observar as condicionantes estabelecidas no Quadro 7 do presente parecer.`;
 };
 
 export const buildSuggestedParecerText = (
@@ -795,8 +831,8 @@ export const buildSuggestedParecerText = (
   const volTexto = (formData.barragemPrincipal.volumeNMM || '').trim() || String(derived.dpa.volumeNmmValido ?? '');
   const dpaClass = derived.dpa.dpaClass;
   const snisb = (formData.barragemPrincipal.snisb || '').trim() || '_____';
-  const altura = derived.cri?.alturaValida ?? parseNumericBr(formData.barragemPrincipal.alturaMaxima) ?? 0;
-  const volume = derived.dpa.volumeNmmValido ?? 0;
+  const altura = derived.cri?.alturaValida ?? parseNumericBr(formData.barragemPrincipal.alturaMaxima);
+  const volume = derived.dpa.volumeNmmValido;
 
   // Pré-classificação: não menciona CRI nem Classe final A-D
   if (derived.isPreClassificacao) {
@@ -864,7 +900,7 @@ export const getUpgOptionsForMunicipality = (municipio: string): string[] => {
   return [];
 };
 
-export const getQuadro6RegulatorioRows = (resumoClass: string) => {
+export const getQuadro7RegulatorioRows = (resumoClass: string) => {
   const upper = (resumoClass || '').toUpperCase();
   const isA = upper.includes('CLASSE A');
   const isB = upper.includes('CLASSE B');
@@ -878,7 +914,7 @@ export const getQuadro6RegulatorioRows = (resumoClass: string) => {
       { col1: className, col2: '', isHeader: true },
       { col1: 'Peças técnicas obrigatórias: PSB completo (6 volumes, incluindo RPSB e PAE), PAE, Relatórios ISR e ISE, RPSB.', col2: '' },
       { col1: 'Periodicidade:', col2: '' },
-      { col1: '• ISR', col2: 'anual (até 31/dez)' },
+      { col1: '• ISR', col2: 'no mínimo anual (até 31/dez)' },
       { col1: '• ISE', col2: 'quando NPGB Alerta/Emergência, antes primeiro enchimento, com RPSB, deplecionamento rápido, eventos extremos, descomissionamento/sabotagem ou exigência SEMA.' },
       { col1: '• RPSB', col2: `${rpsbFreq} (Resumo Executivo no SNISB).` },
       { col1: '• PAE', col2: 'atualização anual; revisão quando necessário (mudanças, recomendações etc.).' },
@@ -890,7 +926,7 @@ export const getQuadro6RegulatorioRows = (resumoClass: string) => {
       { col1: 'Classe C', col2: '', isHeader: true },
       { col1: 'Peças técnicas obrigatórias: PSB (6 volumes, sem PAE obrigatório), Relatórios ISR e ISE, RPSB.', col2: '' },
       { col1: 'Periodicidade:', col2: '' },
-      { col1: '• ISR', col2: 'anual (até 31/dez)' },
+      { col1: '• ISR', col2: 'no mínimo anual (até 31/dez)' },
       { col1: '• ISE', col2: 'quando NPGB Alerta/Emergência, antes primeiro enchimento, com RPSB, deplecionamento rápido, eventos extremos, descomissionamento/sabotagem ou exigência SEMA.' },
       { col1: '• RPSB', col2: 'a cada 10 anos (Resumo Executivo no SNISB).' },
       { col1: '• PSB', col2: 'atualização contínua com resultados de inspeções.' },
@@ -901,9 +937,9 @@ export const getQuadro6RegulatorioRows = (resumoClass: string) => {
       { col1: 'Classe D', col2: '', isHeader: true },
       { col1: 'Peças técnicas obrigatórias: PSB (6 volumes, sem PAE obrigatório), Relatórios ISR e, quando exigido pela SEMA, ISE, RPSB.', col2: '' },
       { col1: 'Periodicidade:', col2: '' },
-      { col1: '• ISR', col2: 'anual (até 31/dez)' },
+      { col1: '• ISR', col2: 'no mínimo bienal (até 31/dez)' },
       { col1: '• ISE', col2: 'quando NPGB Alerta/Emergência, antes do primeiro enchimento, com RPSB, deplecionamento rápido, eventos extremos, descomissionamento/sabotagem ou por exigência da SEMA.' },
-      { col1: '• RPSB', col2: 'a cada 15 anos (Resumo Executivo no SNISB).' },
+      { col1: '• RPSB', col2: 'a cada 12 anos (Resumo Executivo no SNISB).' },
       { col1: '• PSB', col2: 'atualização contínua com resultados de inspeções.' },
     ];
   }

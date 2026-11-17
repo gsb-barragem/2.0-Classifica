@@ -179,11 +179,11 @@ export const OPS_TIPO_FUNDACAO = [
 
 // --- DPA OPTIONS ---
 export const OPS_DPA1_VOLUME = [
-  "MUITO BAIXO – inferior a 3hm³ (1)",
-  "BAIXO – de 3 a 10 hm³ (2)",
-  "MEDIO – de 10 a 75 hm³ (3)",
-  "ALTO – de 75 a 200 hm³ (4)",
-  "MUITO ALTO – superior a 200hm³ (5)"
+  "Muito pequeno – ≤ 3 hm³ (1)",
+  "Pequeno – > 3 a 10 hm³ (2)",
+  "Médio – > 10 a 75 hm³ (3)",
+  "Grande – > 75 a 200 hm³ (4)",
+  "Muito grande – > 200 hm³ (5)"
 ];
 
 export const OPS_DPA2_CONSTRUCOES = [
