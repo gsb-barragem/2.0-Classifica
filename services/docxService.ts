@@ -1,6 +1,7 @@
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType, Header, Footer, PageNumber, ImageRun, ISectionOptions } from 'docx';
 import saveAs from 'file-saver';
 import { ParecerData, DocItem, BarramentoData, DanoEnum, RiscoEnum } from '../types';
+import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
 
 // Placeholder Base64 for the Logo (Mato Grosso / SEMA generic placeholder)
 // Users should replace this string with the actual Base64 of their specific logo image.
@@ -73,7 +74,7 @@ function createBarramentoTable(b: BarramentoData, title: string): (Paragraph | T
   const rows: string[][] = [
     ["Nome da barragem", b.nome],
     ["SNISB", b.snisb || "-"],
-    ["Coordenadas", `Lat: ${b.lat} Long: ${b.long}`],
+    ["Coordenadas", `Lat: ${normalizeCoordinateToGMS(b.lat) || b.lat} Long: ${normalizeCoordinateToGMS(b.long) || b.long}`],
     ["Altura Máxima (m)", b.alturaMaxima + (b.alturaMaximaFls ? ` (${formatFls(b.alturaMaximaFls)})` : "")],
     ["Borda Livre (m)", b.bordaLivre + (b.bordaLivreFls ? ` (${formatFls(b.bordaLivreFls)})` : "")],
     ["Cota do Coroamento (m)", b.cotaCoroamento + (b.cotaCoroamentoFls ? ` (${formatFls(b.cotaCoroamentoFls)})` : "")],
@@ -694,7 +695,7 @@ export const generateParecerDoc = async (data: ParecerData) => {
           ["DANO POTENCIAL ASSOCIADO:", data.classificacao.dpaClass.toUpperCase()],
           ["CATEGORIA DE RISCO:", data.classificacao.risco.toUpperCase()],
           ["Classificação quanto ao volume:", volNomenclature],
-          ["Coordenadas:", `${data.barragemPrincipal.lat} - ${data.barragemPrincipal.long}`],
+          ["Coordenadas:", `${normalizeCoordinateToGMS(data.barragemPrincipal.lat) || data.barragemPrincipal.lat} - ${normalizeCoordinateToGMS(data.barragemPrincipal.long) || data.barragemPrincipal.long}`],
           ["Altura (m):", data.barragemPrincipal.alturaMaxima || "-"],
           ["Tipo de Barragem:", tipoBarragem],
           ["Volume armazenado (NMM) (hm³):", data.barragemPrincipal.volumeNMM || "-"],

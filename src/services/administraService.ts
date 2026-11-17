@@ -17,6 +17,7 @@ import {
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { logActivity } from '../lib/auditService';
 import { AppDocument } from '../contexts/DataContext';
+import { normalizeCoordinateToGMS, parseGMSToDecimal } from '../utils/coordinateUtils';
 
 const CURRENT_SYSTEM: SistemaOrigem = 'CLASSIFICA_CSB';
 
@@ -45,25 +46,359 @@ export interface MasterWriteResult<T> {
 }
 
 // ============================================================================
-// LEITURA DA BASE MESTRE (ADMINISTRA BARRAGENS)
+// LEITURA DA BASE MESTRE (ADMINISTRA BARRAGENS VIA /api/administra-leitura)
 // ============================================================================
 
-export async function searchEmpreendedores(query = ''): Promise<{ data: EmpreendedorMaster[]; configured: boolean; error?: string }> {
+function pickCanonicalField(
+  row: Record<string, any> | null | undefined,
+  patterns: RegExp[]
+): string | null {
+  if (!row || typeof row !== 'object') return null;
+  const keys = Object.keys(row);
+  for (const rx of patterns) {
+    const matchedKey = keys.find((k) => rx.test(k));
+    if (matchedKey) {
+      const val = row[matchedKey];
+      if (val !== null && val !== undefined && String(val).trim() !== '') {
+        return String(val).trim();
+      }
+    }
+  }
+  return null;
+}
+
+export function mapCanonicalEmpreendedor(record: Record<string, any>): EmpreendedorMaster {
+  const cpfCnpj =
+    pickCanonicalField(record, [
+      /^cpf_cnpj$/i,
+      /^cnpj_cpf$/i,
+      /^documento$/i,
+      /^cnpj$/i,
+      /^cpf$/i,
+    ]) || '';
+  const digits = normalizeDigits(cpfCnpj);
+  const tipoPessoaRaw = pickCanonicalField(record, [/^tipo_pessoa$/i]);
+  const tipoPessoa: 'PF' | 'PJ' =
+    tipoPessoaRaw === 'PJ' || digits.length === 14 ? 'PJ' : 'PF';
+
+  return {
+    id:
+      pickCanonicalField(record, [/^id$/i, /^empreendedor_id$/i, /^id_empreendedor$/i]) || '',
+    cpf_cnpj: cpfCnpj,
+    tipo_pessoa: tipoPessoa,
+    razao_social:
+      pickCanonicalField(record, [
+        /^empreendedor_nome$/i,
+        /^razao_social$/i,
+        /^nome_razao$/i,
+        /^nome_razao_social$/i,
+        /^nome$/i,
+        /^nome_empreendedor$/i,
+        /^nome_completo$/i,
+        /^nome_fantasia$/i,
+        /^titulo$/i,
+      ]) || 'Empreendedor sem nome',
+    nome_fantasia: pickCanonicalField(record, [/^nome_fantasia$/i]),
+    email: pickCanonicalField(record, [/^email$/i, /^e_mail$/i]),
+    telefone: pickCanonicalField(record, [/^telefone$/i, /^celular$/i, /^fone$/i]),
+    endereco: pickCanonicalField(record, [/^endereco$/i, /^logradouro$/i, /^localizacao$/i]),
+    municipio: pickCanonicalField(record, [/^municipio$/i, /^municipio_uf$/i, /^cidade$/i]),
+    num_car: pickCanonicalField(record, [/^num_car$/i, /^car$/i, /^numero_car$/i, /^car_mt$/i]),
+    sistema_origem:
+      (pickCanonicalField(record, [/^sistema_origem$/i]) as SistemaOrigem) ||
+      'ADMINISTRA_BARRAGENS',
+    created_by_user_id: pickCanonicalField(record, [/^created_by_user_id$/i]),
+    created_by_name: pickCanonicalField(record, [/^created_by_name$/i]),
+    created_at: pickCanonicalField(record, [/^created_at$/i]) || undefined,
+    updated_at: pickCanonicalField(record, [/^updated_at$/i]) || undefined,
+  };
+}
+
+export function mapCanonicalBarragem(
+  record: Record<string, any>,
+  empreendedor?: Record<string, any> | null
+): BarragemMaster {
+  const empId =
+    pickCanonicalField(record, [/^empreendedor_id$/i, /^id_empreendedor$/i]) ||
+    pickCanonicalField(empreendedor, [/^id$/i, /^empreendedor_id$/i, /^id_empreendedor$/i]);
+
+  return {
+    id: pickCanonicalField(record, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]) || '',
+    empreendedor_id: empId,
+    empreendedor_nome:
+      pickCanonicalField(record, [/^empreendedor_nome$/i, /^razao_social_empreendedor$/i]) ||
+      pickCanonicalField(empreendedor, [
+        /^empreendedor_nome$/i,
+        /^razao_social$/i,
+        /^nome_razao$/i,
+        /^nome$/i,
+      ]),
+    empreendedor_cpf_cnpj:
+      pickCanonicalField(record, [/^empreendedor_cpf_cnpj$/i]) ||
+      pickCanonicalField(empreendedor, [/^cpf_cnpj$/i, /^cnpj_cpf$/i, /^documento$/i]),
+    snisb: pickCanonicalField(record, [/^snisb$/i, /^codigo_snisb$/i]),
+    nome:
+      pickCanonicalField(record, [
+        /^barragem_nome$/i,
+        /^nome_barragem$/i,
+        /^nome$/i,
+        /^barragem$/i,
+        /^denominacao$/i,
+        /^titulo$/i,
+      ]) || 'Barragem sem nome',
+    municipio:
+      pickCanonicalField(record, [/^municipio$/i, /^municipio_uf$/i, /^cidade$/i]) || '',
+    upg: pickCanonicalField(record, [/^upg$/i]),
+    sub_bacia: pickCanonicalField(record, [/^sub_bacia$/i, /^bacia$/i]),
+    curso_agua: pickCanonicalField(record, [/^curso_agua$/i, /^curso_dagua$/i, /^rio$/i]),
+    zona: pickCanonicalField(record, [/^zona$/i]),
+    localizacao: pickCanonicalField(record, [/^localizacao$/i, /^endereco$/i]),
+    lat_decimal: (() => {
+      if (typeof record?.lat_decimal === 'number') return record.lat_decimal;
+      if (typeof record?.lat_decimal === 'string' && record.lat_decimal.trim() !== '') {
+        const parsed = parseFloat(record.lat_decimal.replace(',', '.'));
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    })(),
+    long_decimal: (() => {
+      if (typeof record?.long_decimal === 'number') return record.long_decimal;
+      if (typeof record?.long_decimal === 'string' && record.long_decimal.trim() !== '') {
+        const parsed = parseFloat(record.long_decimal.replace(',', '.'));
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    })(),
+    lat_gms: (() => {
+      const rawLat = pickCanonicalField(record, [/^lat_gms$/i, /^latitude_gms$/i, /^latitude$/i, /^lat$/i]);
+      const dec = typeof record?.lat_decimal === 'number' ? record.lat_decimal : typeof record?.lat_decimal === 'string' ? parseFloat(record.lat_decimal.replace(',', '.')) : null;
+      return normalizeCoordinateToGMS(rawLat, dec) || null;
+    })(),
+    long_gms: (() => {
+      const rawLong = pickCanonicalField(record, [
+        /^long_gms$/i,
+        /^longitude_gms$/i,
+        /^longitude$/i,
+        /^long$/i,
+        /^lon$/i,
+      ]);
+      const dec = typeof record?.long_decimal === 'number' ? record.long_decimal : typeof record?.long_decimal === 'string' ? parseFloat(record.long_decimal.replace(',', '.')) : null;
+      return normalizeCoordinateToGMS(rawLong, dec) || null;
+    })(),
+    altura_maxima: pickCanonicalField(record, [/^altura_maxima$/i, /^altura$/i]),
+    comprimento_coroamento: pickCanonicalField(record, [
+      /^comprimento_coroamento$/i,
+      /^comprimento$/i,
+    ]),
+    largura_coroamento: pickCanonicalField(record, [/^largura_coroamento$/i, /^largura$/i]),
+    volume_nmo: pickCanonicalField(record, [/^volume_nmo$/i, /^volume$/i]),
+    volume_nmm: pickCanonicalField(record, [/^volume_nmm$/i, /^volume_maximo$/i]),
+    tipo_estrutural: pickCanonicalField(record, [/^tipo_estrutural$/i]),
+    tipo_fundacao: pickCanonicalField(record, [/^tipo_fundacao$/i]),
+    finalidade: pickCanonicalField(record, [/^finalidade$/i]),
+    situacao: pickCanonicalField(record, [/^situacao$/i]),
+    dpa_atual: pickCanonicalField(record, [/^dpa_atual$/i, /^dpa$/i]),
+    cri_atual: pickCanonicalField(record, [/^cri_atual$/i, /^cri$/i]),
+    enquadramento_pnsb:
+      typeof record?.enquadramento_pnsb === 'boolean' ? record.enquadramento_pnsb : null,
+    sistema_origem:
+      (pickCanonicalField(record, [/^sistema_origem$/i]) as SistemaOrigem) ||
+      'ADMINISTRA_BARRAGENS',
+    created_by_user_id: pickCanonicalField(record, [/^created_by_user_id$/i]),
+    created_by_name: pickCanonicalField(record, [/^created_by_name$/i]),
+    created_at: pickCanonicalField(record, [/^created_at$/i]) || undefined,
+    updated_at: pickCanonicalField(record, [/^updated_at$/i]) || undefined,
+  };
+}
+
+export interface RtArtVinculo {
+  id: string;
+  art: string;
+  rt_id: string;
+  barragem_id?: string | null;
+  barragem_nome?: string | null;
+  barragem_snisb?: string | null;
+  atividade?: string | null;
+  observacao?: string | null;
+  created_at?: string | null;
+  origem?: 'vinculo' | 'rt' | 'arts';
+}
+
+export function mapCanonicalRt(
+  record: Record<string, any>,
+  vinculosBarragem?: Array<{ vinculo: AdministraRecord; barragem: AdministraRecord | null }>
+): ResponsavelTecnicoMaster & { art?: string | null; arts?: RtArtVinculo[] } {
+  const rtId = pickCanonicalField(record, [/^id$/i, /^rt_id$/i, /^id_rt$/i]) || '';
+  const directArt = pickCanonicalField(record, [
+    /^art$/i,
+    /^numero_art$/i,
+    /^art_numero$/i,
+    /^num_art$/i,
+    /^registro_art$/i,
+  ]);
+
+  const arts: RtArtVinculo[] = [];
+  const seenArts = new Set<string>();
+  const pushArt = (item: RtArtVinculo) => {
+    const clean = (item.art || '').trim();
+    if (!clean) return;
+    const key = `${clean.toUpperCase()}::${item.barragem_id || ''}`;
+    if (seenArts.has(key)) return;
+    seenArts.add(key);
+    arts.push({ ...item, art: clean });
+  };
+
+  if (directArt) {
+    pushArt({
+      id: `rt_${rtId}_${directArt}`,
+      art: directArt,
+      rt_id: rtId,
+      origem: 'rt',
+    });
+  }
+
+  if (Array.isArray(record?.arts)) {
+    for (const entry of record.arts) {
+      if (typeof entry === 'string' && entry.trim()) {
+        pushArt({
+          id: `rt_arr_${rtId}_${entry.trim()}`,
+          art: entry.trim(),
+          rt_id: rtId,
+          origem: 'rt',
+        });
+      } else if (entry && typeof entry === 'object') {
+        const a = pickCanonicalField(entry, [/^art$/i, /^numero_art$/i, /^art_numero$/i, /^numero$/i]);
+        if (a) {
+          pushArt({
+            id: pickCanonicalField(entry, [/^id$/i]) || `rt_obj_${rtId}_${a}`,
+            art: a,
+            rt_id: rtId,
+            barragem_id: pickCanonicalField(entry, [/^barragem_id$/i]),
+            atividade: pickCanonicalField(entry, [/^atividade$/i, /^funcao$/i, /^tipo$/i]),
+            observacao: pickCanonicalField(entry, [/^observacao$/i, /^observacoes$/i, /^descricao$/i]),
+            created_at: pickCanonicalField(entry, [/^created_at$/i]),
+            origem: 'rt',
+          });
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(vinculosBarragem)) {
+    for (const vItem of vinculosBarragem) {
+      const vinc = vItem?.vinculo;
+      const bar = vItem?.barragem;
+      if (!vinc || typeof vinc !== 'object') continue;
+      const vArt = pickCanonicalField(vinc, [
+        /^art$/i,
+        /^numero_art$/i,
+        /^art_numero$/i,
+        /^num_art$/i,
+        /^registro_art$/i,
+        /^codigo_art$/i,
+      ]);
+      if (!vArt) continue;
+      const barId =
+        pickCanonicalField(vinc, [/^barragem_id$/i, /^id_barragem$/i]) ||
+        pickCanonicalField(bar, [/^id$/i, /^barragem_id$/i]);
+      pushArt({
+        id: pickCanonicalField(vinc, [/^id$/i, /^vinculo_id$/i]) || `vinc_${rtId}_${vArt}`,
+        art: vArt,
+        rt_id: rtId,
+        barragem_id: barId,
+        barragem_nome:
+          pickCanonicalField(vinc, [/^barragem_nome$/i, /^nome_barragem$/i]) ||
+          pickCanonicalField(bar, [/^barragem_nome$/i, /^nome_barragem$/i, /^nome$/i]),
+        barragem_snisb:
+          pickCanonicalField(vinc, [/^barragem_snisb$/i, /^snisb$/i]) ||
+          pickCanonicalField(bar, [/^snisb$/i, /^codigo_snisb$/i]),
+        atividade: pickCanonicalField(vinc, [/^atividade$/i, /^funcao$/i, /^tipo$/i, /^papel$/i]),
+        observacao: pickCanonicalField(vinc, [/^observacao$/i, /^observacoes$/i, /^descricao$/i]),
+        created_at: pickCanonicalField(vinc, [/^created_at$/i]),
+        origem: 'vinculo',
+      });
+    }
+  }
+
+  return {
+    id: rtId,
+    nome:
+      pickCanonicalField(record, [
+        /^rt_nome$/i,
+        /^nome_rt$/i,
+        /^nome$/i,
+        /^nome_completo$/i,
+        /^responsavel_tecnico$/i,
+        /^razao_social$/i,
+      ]) || 'Responsável Técnico',
+    cpf: pickCanonicalField(record, [/^cpf$/i, /^cpf_cnpj$/i, /^documento$/i]),
+    registro_profissional: pickCanonicalField(record, [
+      /^registro_profissional$/i,
+      /^crea$/i,
+      /^registro$/i,
+      /^conselho_registro$/i,
+      /^numero_registro$/i,
+    ]),
+    email: pickCanonicalField(record, [/^email$/i, /^e_mail$/i]),
+    telefone: pickCanonicalField(record, [/^telefone$/i, /^celular$/i, /^fone$/i]),
+    art: directArt || arts[0]?.art || null,
+    arts,
+    sistema_origem:
+      (pickCanonicalField(record, [/^sistema_origem$/i]) as SistemaOrigem) ||
+      'ADMINISTRA_BARRAGENS',
+    created_by_user_id: pickCanonicalField(record, [/^created_by_user_id$/i]),
+    created_by_name: pickCanonicalField(record, [/^created_by_name$/i]),
+    created_at: pickCanonicalField(record, [/^created_at$/i]) || undefined,
+    updated_at: pickCanonicalField(record, [/^updated_at$/i]) || undefined,
+  };
+}
+
+export async function searchEmpreendedores(
+  query = '',
+  pageSize = 25
+): Promise<{
+  data: EmpreendedorMaster[];
+  configured: boolean;
+  total?: number | null;
+  error?: string;
+}> {
+  const clean = normalizeText(query);
+  const safeLimit = Math.max(1, Math.min(50, pageSize));
+
+  const canonical = await fetchEmpreendedoresPage(1, safeLimit, clean);
+  if (canonical.configured && !canonical.error) {
+    const mapped = canonical.data.map((item) => mapCanonicalEmpreendedor(item.record));
+    return {
+      data: mapped,
+      configured: true,
+      total: canonical.total ?? mapped.length,
+    };
+  }
+
   const client = getAdministraClient();
-  if (!client) return { data: [], configured: false };
+  if (!client) {
+    return {
+      data: [],
+      configured: canonical.configured,
+      total: null,
+      error: canonical.error?.userMessage,
+    };
+  }
 
   try {
-    const clean = normalizeText(query);
     const rpcRes = await client.rpc('administra_buscar_empreendedores', { p_termo: clean });
     if (!rpcRes.error && Array.isArray(rpcRes.data)) {
-      return { data: rpcRes.data as EmpreendedorMaster[], configured: true };
+      const mapped = (rpcRes.data as Record<string, any>[]).map(mapCanonicalEmpreendedor);
+      return { data: mapped, configured: true, total: mapped.length };
     }
 
     let q = client
       .from('administra_empreendedores')
-      .select('id, cpf_cnpj, tipo_pessoa, razao_social, nome_fantasia, email, telefone, endereco, municipio, num_car, sistema_origem, created_by_user_id, created_by_name, created_at, updated_at')
+      .select(
+        'id, cpf_cnpj, tipo_pessoa, razao_social, nome_fantasia, email, telefone, endereco, municipio, num_car, sistema_origem, created_by_user_id, created_by_name, created_at, updated_at'
+      )
       .order('razao_social', { ascending: true })
-      .limit(50);
+      .limit(safeLimit);
 
     if (clean) {
       const digits = normalizeDigits(clean);
@@ -75,35 +410,85 @@ export async function searchEmpreendedores(query = ''): Promise<{ data: Empreend
     }
 
     const { data, error } = await q;
-    if (error) return { data: [], configured: true, error: 'Não foi possível consultar empreendedores no Administra.' };
-    return { data: (data || []) as EmpreendedorMaster[], configured: true };
+    if (error) {
+      return {
+        data: [],
+        configured: true,
+        error: 'Não foi possível consultar empreendedores no Administra.',
+      };
+    }
+    const mapped = (data || []).map(mapCanonicalEmpreendedor);
+    return { data: mapped, configured: true, total: mapped.length };
   } catch {
-    return { data: [], configured: true, error: 'Falha de comunicação com o Administra Barragens.' };
+    return {
+      data: [],
+      configured: true,
+      error: 'Falha de comunicação com o Administra Barragens.',
+    };
   }
 }
 
 export async function searchBarragens(
   query = '',
-  empreendedorId?: string
-): Promise<{ data: BarragemMaster[]; configured: boolean; error?: string }> {
+  empreendedorId?: string,
+  pageSize = 25
+): Promise<{
+  data: BarragemMaster[];
+  configured: boolean;
+  total?: number | null;
+  error?: string;
+}> {
+  const clean = normalizeText(query);
+  const safeLimit = Math.max(1, Math.min(50, pageSize));
+
+  const canonical = await fetchBarragensPage(1, safeLimit, clean);
+  if (canonical.configured && !canonical.error) {
+    let mapped = canonical.data.map((item) =>
+      mapCanonicalBarragem(item.record, item.empreendedor)
+    );
+
+    if (empreendedorId) {
+      const linked = mapped.filter((b) => b.empreendedor_id === empreendedorId);
+      const others = mapped.filter((b) => b.empreendedor_id !== empreendedorId);
+      mapped = linked.length > 0 ? [...linked, ...others] : mapped;
+    }
+
+    return {
+      data: mapped,
+      configured: true,
+      total: canonical.total ?? mapped.length,
+    };
+  }
+
   const client = getAdministraClient();
-  if (!client) return { data: [], configured: false };
+  if (!client) {
+    return {
+      data: [],
+      configured: canonical.configured,
+      total: null,
+      error: canonical.error?.userMessage,
+    };
+  }
 
   try {
-    const clean = normalizeText(query);
     const rpcRes = await client.rpc('administra_buscar_barragens', {
       p_termo: clean,
       p_empreendedor_id: empreendedorId || null,
     });
     if (!rpcRes.error && Array.isArray(rpcRes.data)) {
-      return { data: rpcRes.data as BarragemMaster[], configured: true };
+      const mapped = (rpcRes.data as Record<string, any>[]).map((r) =>
+        mapCanonicalBarragem(r)
+      );
+      return { data: mapped, configured: true, total: mapped.length };
     }
 
     let q = client
       .from('administra_barragens')
-      .select('id, empreendedor_id, snisb, nome, municipio, upg, sub_bacia, curso_agua, zona, localizacao, lat_gms, long_gms, lat_decimal, long_decimal, altura_maxima, comprimento_coroamento, largura_coroamento, volume_nmo, volume_nmm, tipo_estrutural, tipo_fundacao, finalidade, situacao, dpa_atual, cri_atual, enquadramento_pnsb, sistema_origem, created_by_user_id, created_by_name, created_at, updated_at')
+      .select(
+        'id, empreendedor_id, snisb, nome, municipio, upg, sub_bacia, curso_agua, zona, localizacao, lat_gms, long_gms, lat_decimal, long_decimal, altura_maxima, comprimento_coroamento, largura_coroamento, volume_nmo, volume_nmm, tipo_estrutural, tipo_fundacao, finalidade, situacao, dpa_atual, cri_atual, enquadramento_pnsb, sistema_origem, created_by_user_id, created_by_name, created_at, updated_at'
+      )
       .order('nome', { ascending: true })
-      .limit(50);
+      .limit(safeLimit);
 
     if (empreendedorId) {
       q = q.eq('empreendedor_id', empreendedorId);
@@ -113,41 +498,93 @@ export async function searchBarragens(
     }
 
     const { data, error } = await q;
-    if (error) return { data: [], configured: true, error: 'Não foi possível consultar barragens no Administra.' };
-    return { data: (data || []) as BarragemMaster[], configured: true };
+    if (error) {
+      return {
+        data: [],
+        configured: true,
+        error: 'Não foi possível consultar barragens no Administra.',
+      };
+    }
+    const mapped = (data || []).map((r) => mapCanonicalBarragem(r));
+    return { data: mapped, configured: true, total: mapped.length };
   } catch {
-    return { data: [], configured: true, error: 'Falha de comunicação com o Administra Barragens.' };
+    return {
+      data: [],
+      configured: true,
+      error: 'Falha de comunicação com o Administra Barragens.',
+    };
   }
 }
 
 export async function searchResponsaveisTecnicos(
-  query = ''
-): Promise<{ data: ResponsavelTecnicoMaster[]; configured: boolean; error?: string }> {
+  query = '',
+  pageSize = 25
+): Promise<{
+  data: Array<ResponsavelTecnicoMaster & { art?: string | null; arts?: RtArtVinculo[] }>;
+  configured: boolean;
+  total?: number | null;
+  error?: string;
+}> {
+  const clean = normalizeText(query);
+  const safeLimit = Math.max(1, Math.min(50, pageSize));
+
+  const canonical = await fetchRtsPage(1, safeLimit, clean);
+  if (canonical.configured && !canonical.error) {
+    const mapped = canonical.data.map((item) =>
+      mapCanonicalRt(item.record, item.vinculosBarragem)
+    );
+    return {
+      data: mapped,
+      configured: true,
+      total: canonical.total ?? mapped.length,
+    };
+  }
+
   const client = getAdministraClient();
-  if (!client) return { data: [], configured: false };
+  if (!client) {
+    return {
+      data: [],
+      configured: canonical.configured,
+      total: null,
+      error: canonical.error?.userMessage,
+    };
+  }
 
   try {
-    const clean = normalizeText(query);
     const rpcRes = await client.rpc('administra_buscar_rts', { p_termo: clean });
     if (!rpcRes.error && Array.isArray(rpcRes.data)) {
-      return { data: rpcRes.data as ResponsavelTecnicoMaster[], configured: true };
+      const mapped = (rpcRes.data as Record<string, any>[]).map((r) => mapCanonicalRt(r));
+      return { data: mapped, configured: true, total: mapped.length };
     }
 
     let q = client
       .from('administra_responsaveis_tecnicos')
-      .select('id, nome, cpf, registro_profissional, email, telefone, sistema_origem, created_by_user_id, created_by_name, created_at, updated_at')
+      .select(
+        'id, nome, cpf, registro_profissional, email, telefone, sistema_origem, created_by_user_id, created_by_name, created_at, updated_at'
+      )
       .order('nome', { ascending: true })
-      .limit(50);
+      .limit(safeLimit);
 
     if (clean) {
       q = q.or(`nome.ilike.%${clean}%,registro_profissional.ilike.%${clean}%`);
     }
 
     const { data, error } = await q;
-    if (error) return { data: [], configured: true, error: 'Não foi possível consultar responsáveis técnicos no Administra.' };
-    return { data: (data || []) as ResponsavelTecnicoMaster[], configured: true };
+    if (error) {
+      return {
+        data: [],
+        configured: true,
+        error: 'Não foi possível consultar responsáveis técnicos no Administra.',
+      };
+    }
+    const mapped = (data || []).map((r) => mapCanonicalRt(r));
+    return { data: mapped, configured: true, total: mapped.length };
   } catch {
-    return { data: [], configured: true, error: 'Falha de comunicação com o Administra Barragens.' };
+    return {
+      data: [],
+      configured: true,
+      error: 'Falha de comunicação com o Administra Barragens.',
+    };
   }
 }
 
@@ -160,21 +597,21 @@ export function canClassificaEditDirectly(sistemaOrigem?: SistemaOrigem | null):
 }
 
 export async function saveEmpreendedorMaster(
-  payload: Partial<EmpreendedorMaster> & { cpf_cnpj: string; razao_social: string },
+  payload: Partial<EmpreendedorMaster> & { cpf_cnpj?: string | null; razao_social: string },
   currentUser: User
 ): Promise<MasterWriteResult<EmpreendedorMaster>> {
-  const client = getAdministraClient();
-  if (!client) {
-    return { success: false, notConfigured: true, message: 'Administra Barragens ainda não está conectado neste ambiente.' };
-  }
-
   if (currentUser.role === 'Visualizador') {
     return { success: false, message: 'Usuários com perfil Visualizador não podem cadastrar ou alterar dados mestres.' };
   }
 
+  const cleanRazao = normalizeText(payload.razao_social);
+  if (cleanRazao.length < 2) {
+    return { success: false, message: 'Informe o nome ou razão social do empreendedor.' };
+  }
+
   const cpfCnpjDigits = normalizeDigits(payload.cpf_cnpj);
-  if (cpfCnpjDigits.length !== 11 && cpfCnpjDigits.length !== 14) {
-    return { success: false, message: 'Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) válido.' };
+  if (cpfCnpjDigits.length > 0 && cpfCnpjDigits.length !== 11 && cpfCnpjDigits.length !== 14) {
+    return { success: false, message: 'Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) válido, ou deixe o campo em branco caso não disponível.' };
   }
 
   // Regra estrita de propriedade: o Classifica só edita registros gerados pelo próprio Classifica.
@@ -187,18 +624,47 @@ export async function saveEmpreendedorMaster(
     };
   }
 
+  const cleanPayload = {
+    cpf_cnpj: cpfCnpjDigits || null,
+    tipo_pessoa: (cpfCnpjDigits.length === 14 ? 'PJ' : 'PF') as 'PF' | 'PJ',
+    razao_social: cleanRazao,
+    nome_fantasia: payload.nome_fantasia ? normalizeText(payload.nome_fantasia) : null,
+    email: payload.email ? payload.email.trim().toLowerCase() : null,
+    telefone: payload.telefone ? payload.telefone.trim() : null,
+    endereco: payload.endereco ? normalizeText(payload.endereco) : null,
+    municipio: payload.municipio ? normalizeText(payload.municipio) : null,
+    num_car: payload.num_car ? normalizeText(payload.num_car) : null,
+  };
+
   try {
-    const cleanPayload = {
-      cpf_cnpj: cpfCnpjDigits,
-      tipo_pessoa: cpfCnpjDigits.length === 14 ? 'PJ' : 'PF',
-      razao_social: normalizeText(payload.razao_social),
-      nome_fantasia: payload.nome_fantasia ? normalizeText(payload.nome_fantasia) : null,
-      email: payload.email ? payload.email.trim().toLowerCase() : null,
-      telefone: payload.telefone ? payload.telefone.trim() : null,
-      endereco: payload.endereco ? normalizeText(payload.endereco) : null,
-      municipio: payload.municipio ? normalizeText(payload.municipio) : null,
-      num_car: payload.num_car ? normalizeText(payload.num_car) : null,
-    };
+    const serverRes = await callAdministraEscritaEndpoint({
+      action: 'salvar_empreendedor',
+      id: payload.id || null,
+      ...cleanPayload,
+    });
+
+    if (serverRes.ok && serverRes.data?.empreendedor) {
+      const mapped = mapCanonicalEmpreendedor(serverRes.data.empreendedor as AdministraRecord);
+      await logActivity(payload.id ? 'ECOSYSTEM_ENTITY_UPDATED' : 'ECOSYSTEM_ENTITY_CREATED', {
+        entidade: 'empreendedor',
+        empreendedor_id: mapped.id,
+        destino: 'ADMINISTRA_BARRAGENS',
+      });
+      return { success: true, data: mapped };
+    }
+
+    if (serverRes.code !== 'ENDPOINT_UNAVAILABLE') {
+      return {
+        success: false,
+        notConfigured: !serverRes.configured,
+        message: serverRes.message || 'Não foi possível salvar o empreendedor no Administra Barragens.',
+      };
+    }
+
+    const client = getAdministraClient();
+    if (!client) {
+      return { success: false, notConfigured: true, message: 'Administra Barragens ainda não está conectado neste ambiente.' };
+    }
 
     const rpcRes = await client.rpc('administra_upsert_empreendedor', {
       p_id: payload.id || null,
@@ -220,28 +686,30 @@ export async function saveEmpreendedorMaster(
       return { success: false, message: 'Não foi possível salvar o empreendedor no Administra Barragens.' };
     }
 
+    const mapped = mapCanonicalEmpreendedor((rpcRes.data || {}) as AdministraRecord);
     await logActivity(payload.id ? 'ECOSYSTEM_ENTITY_UPDATED' : 'ECOSYSTEM_ENTITY_CREATED', {
       entidade: 'empreendedor',
+      empreendedor_id: mapped.id,
       destino: 'ADMINISTRA_BARRAGENS',
     });
 
-    return { success: true, data: rpcRes.data as EmpreendedorMaster };
+    return { success: true, data: mapped };
   } catch {
     return { success: false, message: 'Erro de comunicação ao salvar empreendedor no Administra.' };
   }
 }
 
 export async function saveBarragemMaster(
-  payload: Partial<BarragemMaster> & { nome: string; municipio: string },
+  payload: Partial<BarragemMaster> & { nome: string; municipio?: string | null },
   currentUser: User
 ): Promise<MasterWriteResult<BarragemMaster>> {
-  const client = getAdministraClient();
-  if (!client) {
-    return { success: false, notConfigured: true, message: 'Administra Barragens ainda não está conectado neste ambiente.' };
-  }
-
   if (currentUser.role === 'Visualizador') {
     return { success: false, message: 'Usuários com perfil Visualizador não podem cadastrar ou alterar barragens.' };
+  }
+
+  const cleanNome = normalizeText(payload.nome);
+  if (cleanNome.length < 2) {
+    return { success: false, message: 'Informe o nome da barragem ou empreendimento.' };
   }
 
   if (payload.id && payload.sistema_origem && !canClassificaEditDirectly(payload.sistema_origem)) {
@@ -253,34 +721,71 @@ export async function saveBarragemMaster(
     };
   }
 
+  const cleanPayload = {
+    empreendedor_id: payload.empreendedor_id || null,
+    snisb: payload.snisb ? payload.snisb.trim().toUpperCase() : null,
+    nome: cleanNome,
+    municipio: payload.municipio ? normalizeText(payload.municipio) : '',
+    upg: payload.upg ? normalizeText(payload.upg) : null,
+    sub_bacia: payload.sub_bacia ? normalizeText(payload.sub_bacia) : null,
+    curso_agua: payload.curso_agua ? normalizeText(payload.curso_agua) : null,
+    zona: payload.zona || 'Rural',
+    localizacao: payload.localizacao ? normalizeText(payload.localizacao) : null,
+    lat_gms: normalizeCoordinateToGMS(payload.lat_gms, payload.lat_decimal) || null,
+    long_gms: normalizeCoordinateToGMS(payload.long_gms, payload.long_decimal) || null,
+    lat_decimal: (() => {
+      if (typeof payload.lat_decimal === 'number' && Number.isFinite(payload.lat_decimal)) return payload.lat_decimal;
+      const parsed = payload.lat_gms ? parseGMSToDecimal(payload.lat_gms) : NaN;
+      return Number.isFinite(parsed) ? parsed : null;
+    })(),
+    long_decimal: (() => {
+      if (typeof payload.long_decimal === 'number' && Number.isFinite(payload.long_decimal)) return payload.long_decimal;
+      const parsed = payload.long_gms ? parseGMSToDecimal(payload.long_gms) : NaN;
+      return Number.isFinite(parsed) ? parsed : null;
+    })(),
+    altura_maxima: payload.altura_maxima || null,
+    comprimento_coroamento: payload.comprimento_coroamento || null,
+    largura_coroamento: payload.largura_coroamento || null,
+    volume_nmo: payload.volume_nmo || null,
+    volume_nmm: payload.volume_nmm || null,
+    tipo_estrutural: payload.tipo_estrutural || null,
+    tipo_fundacao: payload.tipo_fundacao || null,
+    finalidade: payload.finalidade || null,
+    situacao: payload.situacao || null,
+    dpa_atual: payload.dpa_atual || null,
+    cri_atual: payload.cri_atual || null,
+    enquadramento_pnsb: payload.enquadramento_pnsb ?? null,
+  };
+
   try {
-    const cleanPayload = {
-      empreendedor_id: payload.empreendedor_id || null,
-      snisb: payload.snisb ? payload.snisb.trim().toUpperCase() : null,
-      nome: normalizeText(payload.nome),
-      municipio: normalizeText(payload.municipio),
-      upg: payload.upg ? normalizeText(payload.upg) : null,
-      sub_bacia: payload.sub_bacia ? normalizeText(payload.sub_bacia) : null,
-      curso_agua: payload.curso_agua ? normalizeText(payload.curso_agua) : null,
-      zona: payload.zona || 'Rural',
-      localizacao: payload.localizacao ? normalizeText(payload.localizacao) : null,
-      lat_gms: payload.lat_gms || null,
-      long_gms: payload.long_gms || null,
-      lat_decimal: payload.lat_decimal ?? null,
-      long_decimal: payload.long_decimal ?? null,
-      altura_maxima: payload.altura_maxima || null,
-      comprimento_coroamento: payload.comprimento_coroamento || null,
-      largura_coroamento: payload.largura_coroamento || null,
-      volume_nmo: payload.volume_nmo || null,
-      volume_nmm: payload.volume_nmm || null,
-      tipo_estrutural: payload.tipo_estrutural || null,
-      tipo_fundacao: payload.tipo_fundacao || null,
-      finalidade: payload.finalidade || null,
-      situacao: payload.situacao || null,
-      dpa_atual: payload.dpa_atual || null,
-      cri_atual: payload.cri_atual || null,
-      enquadramento_pnsb: payload.enquadramento_pnsb ?? null,
-    };
+    const serverRes = await callAdministraEscritaEndpoint({
+      action: 'salvar_barragem',
+      id: payload.id || null,
+      ...cleanPayload,
+    });
+
+    if (serverRes.ok && serverRes.data?.barragem) {
+      const mapped = mapCanonicalBarragem(serverRes.data.barragem as AdministraRecord);
+      await logActivity(payload.id ? 'ECOSYSTEM_ENTITY_UPDATED' : 'ECOSYSTEM_ENTITY_CREATED', {
+        entidade: 'barragem',
+        barragem_id: mapped.id,
+        destino: 'ADMINISTRA_BARRAGENS',
+      });
+      return { success: true, data: mapped };
+    }
+
+    if (serverRes.code !== 'ENDPOINT_UNAVAILABLE') {
+      return {
+        success: false,
+        notConfigured: !serverRes.configured,
+        message: serverRes.message || 'Não foi possível salvar a barragem no Administra Barragens.',
+      };
+    }
+
+    const client = getAdministraClient();
+    if (!client) {
+      return { success: false, notConfigured: true, message: 'Administra Barragens ainda não está conectado neste ambiente.' };
+    }
 
     const rpcRes = await client.rpc('administra_upsert_barragem', {
       p_id: payload.id || null,
@@ -302,12 +807,14 @@ export async function saveBarragemMaster(
       return { success: false, message: 'Não foi possível salvar a barragem no Administra Barragens.' };
     }
 
+    const mapped = mapCanonicalBarragem((rpcRes.data || {}) as AdministraRecord);
     await logActivity(payload.id ? 'ECOSYSTEM_ENTITY_UPDATED' : 'ECOSYSTEM_ENTITY_CREATED', {
       entidade: 'barragem',
+      barragem_id: mapped.id,
       destino: 'ADMINISTRA_BARRAGENS',
     });
 
-    return { success: true, data: rpcRes.data as BarragemMaster };
+    return { success: true, data: mapped };
   } catch {
     return { success: false, message: 'Erro de comunicação ao salvar barragem no Administra.' };
   }
@@ -373,6 +880,243 @@ export async function saveResponsavelTecnicoMaster(
   } catch {
     return { success: false, message: 'Erro de comunicação ao salvar responsável técnico no Administra.' };
   }
+}
+
+async function callAdministraEscritaEndpoint(
+  payload: Record<string, unknown>
+): Promise<{
+  ok: boolean;
+  configured: boolean;
+  status: number;
+  data?: any;
+  message?: string;
+  code?: string;
+}> {
+  const token = await getClassificaAccessToken();
+  if (!token) {
+    return {
+      ok: false,
+      configured: false,
+      status: 401,
+      code: 'AUTH_REQUIRED',
+      message: 'Sessão autenticada do Classifica CSB obrigatória para gravar no Administra.',
+    };
+  }
+
+  try {
+    const response = await fetch('/api/administra-escrita', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return {
+        ok: false,
+        configured: false,
+        status: response.status,
+        code: 'ENDPOINT_UNAVAILABLE',
+        message: 'Endpoint /api/administra-escrita indisponível.',
+      };
+    }
+
+    const json = await response.json();
+    if (!response.ok || !json?.ok) {
+      return {
+        ok: false,
+        configured: json?.configured !== false,
+        status: response.status,
+        code: json?.code,
+        message:
+          typeof json?.error === 'string'
+            ? json.error
+            : json?.error?.message || 'Erro ao gravar dados no Administra Barragens.',
+      };
+    }
+
+    return { ok: true, configured: true, status: response.status, data: json };
+  } catch (err: any) {
+    return {
+      ok: false,
+      configured: false,
+      status: 0,
+      code: 'NETWORK_ERROR',
+      message: err?.message || 'Falha de comunicação com o servidor do Administra.',
+    };
+  }
+}
+
+export async function listArtsForRt(
+  rtId: string
+): Promise<{ data: RtArtVinculo[]; error?: string }> {
+  if (!rtId) return { data: [] };
+  const serverRes = await callAdministraEscritaEndpoint({
+    action: 'listar_arts_rt',
+    rtId,
+  });
+
+  if (serverRes.ok) {
+    return { data: (serverRes.data?.items || []) as RtArtVinculo[] };
+  }
+
+  return { data: [], error: serverRes.message };
+}
+
+export async function saveArtForRt(
+  params: {
+    rtId: string;
+    art: string;
+    barragemId?: string | null;
+    atividade?: string | null;
+    observacao?: string | null;
+  },
+  currentUser: User
+): Promise<MasterWriteResult<RtArtVinculo>> {
+  if (currentUser.role === 'Visualizador') {
+    return {
+      success: false,
+      message: 'Usuários com perfil Visualizador não podem cadastrar ARTs no Administra.',
+    };
+  }
+
+  const cleanArt = normalizeText(params.art);
+  if (!params.rtId || cleanArt.length < 2) {
+    return {
+      success: false,
+      message: 'Selecione o RT e informe um número de ART válido.',
+    };
+  }
+
+  const serverRes = await callAdministraEscritaEndpoint({
+    action: 'salvar_art_rt',
+    rtId: params.rtId,
+    art: cleanArt,
+    barragemId: params.barragemId || null,
+    atividade: params.atividade ? normalizeText(params.atividade) : null,
+    observacao: params.observacao ? normalizeText(params.observacao) : null,
+  });
+
+  if (serverRes.ok && serverRes.data?.artItem) {
+    await logActivity('ECOSYSTEM_ENTITY_CREATED', {
+      entidade: 'art_rt',
+      rt_id: params.rtId,
+      art: cleanArt,
+      destino: 'ADMINISTRA_BARRAGENS',
+    });
+    return { success: true, data: serverRes.data.artItem as RtArtVinculo };
+  }
+
+  return {
+    success: false,
+    notConfigured: !serverRes.configured,
+    message: serverRes.message || 'Não foi possível salvar a ART no Administra.',
+  };
+}
+
+export async function createResponsavelTecnicoInAdministra(
+  payload: {
+    nome: string;
+    cpf?: string;
+    registro_profissional?: string;
+    email?: string;
+    telefone?: string;
+    art?: string;
+    barragemId?: string | null;
+  },
+  currentUser: User
+): Promise<
+  MasterWriteResult<{
+    rt: ResponsavelTecnicoMaster & { art?: string | null; arts?: RtArtVinculo[] };
+    artItem?: RtArtVinculo | null;
+    artSaveWarning?: string;
+  }>
+> {
+  if (currentUser.role === 'Visualizador') {
+    return {
+      success: false,
+      message: 'Usuários com perfil Visualizador não podem cadastrar RTs no Administra.',
+    };
+  }
+
+  const cleanNome = normalizeText(payload.nome);
+  if (cleanNome.length < 2) {
+    return { success: false, message: 'Informe o nome completo do Responsável Técnico.' };
+  }
+
+  const serverRes = await callAdministraEscritaEndpoint({
+    action: 'salvar_rt',
+    nome: cleanNome,
+    cpf: payload.cpf ? normalizeDigits(payload.cpf) : null,
+    registro_profissional: payload.registro_profissional
+      ? normalizeText(payload.registro_profissional).toUpperCase()
+      : null,
+    email: payload.email ? payload.email.trim().toLowerCase() : null,
+    telefone: payload.telefone ? payload.telefone.trim() : null,
+    art: payload.art ? normalizeText(payload.art) : null,
+    barragemId: payload.barragemId || null,
+  });
+
+  if (serverRes.ok && serverRes.data?.rt) {
+    const mappedRt = mapCanonicalRt(serverRes.data.rt as AdministraRecord);
+    const artItem = (serverRes.data.artItem || null) as RtArtVinculo | null;
+    if (artItem) {
+      mappedRt.art = artItem.art;
+      mappedRt.arts = [artItem, ...(mappedRt.arts || [])];
+    }
+
+    await logActivity('ECOSYSTEM_ENTITY_CREATED', {
+      entidade: 'responsavel_tecnico',
+      rt_id: mappedRt.id,
+      art: artItem?.art || null,
+      destino: 'ADMINISTRA_BARRAGENS',
+    });
+
+    return {
+      success: true,
+      data: {
+        rt: mappedRt,
+        artItem,
+        artSaveWarning: serverRes.data.artSaveWarning,
+      },
+    };
+  }
+
+  if (serverRes.code === 'ENDPOINT_UNAVAILABLE' || !serverRes.configured) {
+    const legacyRes = await saveResponsavelTecnicoMaster(
+      {
+        nome: cleanNome,
+        cpf: payload.cpf || null,
+        registro_profissional: payload.registro_profissional || null,
+        email: payload.email || null,
+        telefone: payload.telefone || null,
+      },
+      currentUser
+    );
+    if (legacyRes.success && legacyRes.data) {
+      return {
+        success: true,
+        data: {
+          rt: { ...legacyRes.data, art: payload.art || null, arts: [] },
+          artItem: null,
+        },
+      };
+    }
+    return {
+      success: false,
+      notConfigured: legacyRes.notConfigured,
+      message: legacyRes.message,
+    };
+  }
+
+  return {
+    success: false,
+    notConfigured: !serverRes.configured,
+    message: serverRes.message || 'Não foi possível cadastrar o RT no Administra.',
+  };
 }
 
 // ============================================================================

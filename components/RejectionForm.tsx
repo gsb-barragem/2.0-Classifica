@@ -21,7 +21,10 @@ import {
   AlertCircle,
   RotateCcw,
   X,
-  FileDown
+  FileDown,
+  Loader2,
+  UserPlus,
+  Unlink
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel, BorderStyle } from 'docx';
@@ -29,11 +32,18 @@ import { saveAs } from 'file-saver';
 import { logActivity } from '../src/lib/auditService';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { DataContext } from '../src/contexts/DataContext';
-import { DocItem, RejectionData, RTRejectionEntry } from '../types';
+import { BarragemMaster, DocItem, EmpreendedorMaster, RejectionData, RTRejectionEntry } from '../types';
 import { supabase } from '../src/supabaseClient';
 import { OPS_ANALISTA as ANALISTAS } from '../constants';
 import ConfirmModal from './ui/ConfirmModal';
-import { syncClassificaProductToAdministra } from '../src/services/administraService';
+import { EcosystemSelector, ResponsavelTecnicoSearchItem } from './EcosystemSelector';
+import {
+  createResponsavelTecnicoInAdministra,
+  saveBarragemMaster,
+  saveEmpreendedorMaster,
+  syncClassificaProductToAdministra,
+} from '../src/services/administraService';
+import { GMS_PLACEHOLDER, decimalToGms, formatGmsInput, normalizeCoordinateToGMS, parseGMSToDecimal as parseCoordGms } from '../src/utils/coordinateUtils';
 
 interface RejectionFormProps {
   initialData?: RejectionData;
@@ -275,6 +285,8 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
       return {
         ...defaultData,
         ...initialData,
+        latEixo: normalizeCoordinateToGMS(initialData.latEixo),
+        longEixo: normalizeCoordinateToGMS(initialData.longEixo),
         docsGerais: reconcileDocList(defaultData.docsGerais, initialData.docsGerais),
         docsIdentificacao: reconcileDocList(defaultData.docsIdentificacao, initialData.docsIdentificacao),
         docsEspolio: reconcileDocList(defaultData.docsEspolio, initialData.docsEspolio),
@@ -310,28 +322,9 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
   }, [currentUser, initialData, formData.analistaRef]);
 
   const [isSaving, setIsSaving] = useState(false);
-
-  const formatGMS = (value: string, isLat: boolean) => {
-    const numeric = value.replace(/\D/g, '');
-    let formatted = numeric;
-    
-    if (numeric.length > 0) {
-      const g = numeric.substring(0, 2);
-      const m = numeric.substring(2, 4);
-      const s = numeric.substring(4, 6);
-      const d = numeric.substring(6, 8);
-      
-      formatted = g;
-      if (numeric.length > 2) formatted += `°${m}`;
-      if (numeric.length > 4) formatted += `'${s}`;
-      if (numeric.length > 6) formatted += `,${d}`;
-      
-      if (numeric.length >= 8) {
-        formatted += `¨${isLat ? 'S' : 'O'}`;
-      }
-    }
-    return formatted;
-  };
+  const [registeringEmp, setRegisteringEmp] = useState(false);
+  const [registeringBar, setRegisteringBar] = useState(false);
+  const [registeringRtId, setRegisteringRtId] = useState<string | null>(null);
 
   const toggleBlock = (block: string) => {
     setExpandedBlocks(prev => ({ ...prev, [block]: !prev[block] }));
@@ -383,9 +376,13 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
   const updateRT = (rtId: string, field: keyof RTRejectionEntry, value: any) => {
     setFormData(prev => ({
       ...prev,
-      responsaveisTecnicos: prev.responsaveisTecnicos.map(rt => 
-        rt.id === rtId ? { ...rt, [field]: value } : rt
-      )
+      responsaveisTecnicos: prev.responsaveisTecnicos.map(rt => {
+        if (rt.id !== rtId) return rt;
+        const resetLink = field === 'nome' || field === 'nomeOutro'
+          ? { rtId: undefined, registeredInAdministra: false }
+          : {};
+        return { ...rt, [field]: value, ...resetLink };
+      })
     }));
   };
 
@@ -432,10 +429,186 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
     }));
   };
 
+  const handleRegisterEmpreendedor = async () => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado para cadastrar na base de dados.');
+      return;
+    }
+    const nome = (formData.nomeEmpreendedor || '').trim();
+    if (nome.length < 2) {
+      toast.error('Informe a identificação do empreendedor antes de cadastrar.');
+      return;
+    }
+    setRegisteringEmp(true);
+    try {
+      const res = await saveEmpreendedorMaster(
+        {
+          id: formData.empreendedorId || undefined,
+          razao_social: nome,
+          cpf_cnpj: formData.cpfCnpj || undefined,
+          endereco: formData.enderecoEmpreendimento || undefined,
+          municipio: formData.municipioEmpreendimento || undefined,
+          num_car: formData.numCar || undefined,
+          sistema_origem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
+        },
+        currentUser
+      );
+      if (res.success && res.data) {
+        setFormData(prev => ({
+          ...prev,
+          empreendedorId: res.data!.id,
+          nomeEmpreendedor: res.data!.razao_social || prev.nomeEmpreendedor,
+          cpfCnpj: res.data!.cpf_cnpj || prev.cpfCnpj,
+          enderecoEmpreendimento: res.data!.endereco || prev.enderecoEmpreendimento,
+          municipioEmpreendimento: res.data!.municipio || prev.municipioEmpreendimento,
+          numCar: res.data!.num_car || prev.numCar,
+          sistemaOrigem: res.data!.sistema_origem || prev.sistemaOrigem,
+        }));
+        toast.success('Empreendedor cadastrado/vinculado na base do Administra.');
+      } else {
+        toast.error(res.message || 'Não foi possível cadastrar o empreendedor no Administra.');
+      }
+    } finally {
+      setRegisteringEmp(false);
+    }
+  };
+
+  const handleRegisterBarragem = async () => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado para cadastrar na base de dados.');
+      return;
+    }
+    const nome = (formData.nomeFazenda || '').trim() || (formData.nomeEmpreendedor || '').trim();
+    if (nome.length < 2 && !(formData.latEixo || '').trim() && !(formData.longEixo || '').trim()) {
+      toast.error('Informe o nome da fazenda/barragem ou coordenadas antes de cadastrar.');
+      return;
+    }
+    setRegisteringBar(true);
+    try {
+      const res = await saveBarragemMaster(
+        {
+          id: formData.barragemId || undefined,
+          nome: nome.length >= 2 ? nome : 'Barragem sem identificação',
+          empreendedor_id: formData.empreendedorId || undefined,
+          municipio: formData.municipioEmpreendimento || undefined,
+          localizacao: formData.enderecoEmpreendimento || undefined,
+          lat_gms: normalizeCoordinateToGMS(formData.latEixo) || undefined,
+          long_gms: normalizeCoordinateToGMS(formData.longEixo) || undefined,
+          finalidade: formData.finalidadeBarramento === 'Outro'
+            ? formData.finalidadeBarramentoOutro || undefined
+            : formData.finalidadeBarramento || undefined,
+          situacao: formData.situacaoEmpreendimento === 'Outro'
+            ? formData.situacaoEmpreendimentoOutro || undefined
+            : formData.situacaoEmpreendimento || undefined,
+          sistema_origem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
+        },
+        currentUser
+      );
+      if (res.success && res.data) {
+        setFormData(prev => ({
+          ...prev,
+          barragemId: res.data!.id,
+          nomeFazenda: res.data!.nome || prev.nomeFazenda,
+          municipioEmpreendimento: res.data!.municipio || prev.municipioEmpreendimento,
+          latEixo: normalizeCoordinateToGMS(res.data!.lat_gms, res.data!.lat_decimal) || prev.latEixo,
+          longEixo: normalizeCoordinateToGMS(res.data!.long_gms, res.data!.long_decimal) || prev.longEixo,
+          sistemaOrigem: res.data!.sistema_origem || prev.sistemaOrigem,
+        }));
+        toast.success('Barragem cadastrada/vinculada na base do Administra.');
+      } else {
+        toast.error(res.message || 'Não foi possível cadastrar a barragem no Administra.');
+      }
+    } finally {
+      setRegisteringBar(false);
+    }
+  };
+
+  const handleRegisterRT = async (rtLocalId: string) => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado para cadastrar na base de dados.');
+      return;
+    }
+    const rt = formData.responsaveisTecnicos.find(item => item.id === rtLocalId);
+    if (!rt) return;
+    const nomeFinal = (rt.nome === 'OUTRO' ? rt.nomeOutro : rt.nome || '').trim();
+    if (nomeFinal.length < 2) {
+      toast.error('Informe o nome completo do Responsável Técnico antes de cadastrar.');
+      return;
+    }
+    setRegisteringRtId(rtLocalId);
+    try {
+      const primeiraArt = rt.arts.map(a => a.numero?.trim()).find(Boolean);
+      const res = await createResponsavelTecnicoInAdministra(
+        {
+          nome: nomeFinal,
+          cpf: rt.cpf || undefined,
+          registro_profissional: rt.registroProfissional || undefined,
+          art: primeiraArt || undefined,
+          barragemId: formData.barragemId || null,
+        },
+        currentUser
+      );
+      if (res.success && res.data?.rt) {
+        setFormData(prev => ({
+          ...prev,
+          responsaveisTecnicos: prev.responsaveisTecnicos.map(item =>
+            item.id === rtLocalId
+              ? {
+                  ...item,
+                  rtId: res.data!.rt.id,
+                  registroProfissional: res.data!.rt.registro_profissional || item.registroProfissional,
+                  cpf: res.data!.rt.cpf || item.cpf,
+                  registeredInAdministra: true,
+                  sistemaOrigem: res.data!.rt.sistema_origem || 'CLASSIFICA_CSB',
+                }
+              : item
+          ),
+        }));
+        toast.success(`Responsável Técnico "${nomeFinal}" cadastrado na base do Administra.`);
+        if (res.data.artSaveWarning) {
+          toast.warning(res.data.artSaveWarning);
+        }
+      } else {
+        toast.error(res.message || 'Não foi possível cadastrar o Responsável Técnico no Administra.');
+      }
+    } finally {
+      setRegisteringRtId(null);
+    }
+  };
+
+  const getAdministraPendencias = (): string[] => {
+    const missing: string[] = [];
+    if ((formData.nomeEmpreendedor || '').trim() && !formData.empreendedorId) {
+      missing.push('Empreendedor');
+    }
+    const hasBarragemManual = Boolean(
+      (formData.nomeFazenda || '').trim() ||
+      (formData.latEixo || '').trim() ||
+      (formData.longEixo || '').trim()
+    );
+    if (hasBarragemManual && !formData.barragemId) {
+      missing.push('Barragem');
+    }
+    formData.responsaveisTecnicos.forEach((rt, idx) => {
+      const rtName = (rt.nome === 'OUTRO' ? rt.nomeOutro : rt.nome || '').trim();
+      if (rtName && !(rt.rtId || rt.registeredInAdministra)) {
+        missing.push(`Responsável Técnico (${rtName || `#${idx + 1}`})`);
+      }
+    });
+    return missing;
+  };
+
   const handleSave = async (isFinal: boolean = false) => {
     if (isFinal) {
       if (!formData.protocolo || !formData.numProcesso || !formData.nomeEmpreendedor) {
         toast.error('Preencha os campos obrigatórios (Protocolo, Processo e Empreendedor) para concluir.');
+        return;
+      }
+      const pendencias = getAdministraPendencias();
+      if (pendencias.length > 0) {
+        toast.error(
+          `Para concluir o indeferimento, cadastre ou vincule na base do Administra: ${pendencias.join(', ')}. Você ainda pode salvar como Rascunho.`
+        );
         return;
       }
     }
@@ -457,8 +630,8 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
         nome_fazenda: formData.nomeFazenda,
         num_car: formData.numCar,
         municipio: formData.municipioEmpreendimento,
-        lat_eixo: formData.latEixo,
-        long_eixo: formData.longEixo,
+        lat_eixo: normalizeCoordinateToGMS(formData.latEixo),
+        long_eixo: normalizeCoordinateToGMS(formData.longEixo),
         situacao: formData.situacao,
         situacao_outro: formData.situacaoOutro || null,
         situacao_empreendimento: formData.situacaoEmpreendimento,
@@ -805,8 +978,8 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
   };
 
   const handleMapLocationSelect = (lat: number, lng: number) => {
-    const latGMS = formatDecimalToGMS(lat, true);
-    const lngGMS = formatDecimalToGMS(lng, false);
+    const latGMS = decimalToGms(lat);
+    const lngGMS = decimalToGms(lng);
     setFormData(prev => ({
       ...prev,
       latEixo: latGMS,
@@ -814,39 +987,8 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
     }));
   };
 
-  const formatDecimalToGMS = (val: number, isLat: boolean): string => {
-    const absolute = Math.abs(val);
-    const degrees = Math.floor(absolute);
-    const minutesNotTruncated = (absolute - degrees) * 60;
-    const minutes = Math.floor(minutesNotTruncated);
-    const secondsNotTruncated = (minutesNotTruncated - minutes) * 60;
-    const seconds = Math.floor(secondsNotTruncated);
-    const hundredths = Math.round((secondsNotTruncated - seconds) * 100);
-    
-    const d = degrees.toString().padStart(2, '0');
-    const m = minutes.toString().padStart(2, '0');
-    const s = seconds.toString().padStart(2, '0');
-    const h = hundredths.toString().padStart(2, '0');
-    
-    return `${d}°${m}'${s},${h}"¨${isLat ? 'S' : 'O'}`;
-  };
-
   const parseGMSToDecimal = (gms: string): number => {
-    if (!gms) return NaN;
-    const regex = /(\d+)°(\d+)'(\d+),(\d+)"/;
-    const match = gms.match(regex);
-    
-    if (!match) {
-      const val = parseFloat(gms.replace(',', '.'));
-      if (isNaN(val)) return NaN;
-      return val > 0 ? -val : val;
-    }
-    
-    const degrees = parseInt(match[1]);
-    const minutes = parseInt(match[2]);
-    const seconds = parseFloat(match[3] + '.' + match[4]);
-    const decimal = degrees + (minutes / 60) + (seconds / 3600);
-    return -decimal;
+    return parseCoordGms(gms, true);
   };
 
   const MapPicker: React.FC = () => {
@@ -1307,6 +1449,44 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
                             </div>
                           ))}
                         </div>
+                        <div className="mt-4 pt-3 border-t border-indigo-100 flex flex-wrap items-center justify-between gap-2">
+                          {rt.rtId || rt.registeredInAdministra ? (
+                            <>
+                              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                                <CheckCircle2 size={14} /> Responsável Técnico cadastrado no Administra
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    responsaveisTecnicos: prev.responsaveisTecnicos.map(item =>
+                                      item.id === rt.id ? { ...item, rtId: undefined, registeredInAdministra: false } : item
+                                    ),
+                                  }))
+                                }
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100"
+                              >
+                                <Unlink size={12} /> Desvincular
+                              </button>
+                            </>
+                          ) : (rt.nome === 'OUTRO' ? rt.nomeOutro : rt.nome || '').trim().length >= 2 ? (
+                            <>
+                              <span className="text-xs font-medium text-amber-700">
+                                RT ainda não cadastrado na base do Administra.
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleRegisterRT(rt.id)}
+                                disabled={registeringRtId === rt.id}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                              >
+                                {registeringRtId === rt.id ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
+                                Cadastrar Responsável Técnico na base de dados
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
                       </div>
                     ))}
                     {formData.responsaveisTecnicos.length === 0 && (
@@ -1390,11 +1570,90 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
                 </div>
 
                 {/* Sub-bloco: Informações do empreendedor e empreendimento */}
-                <div className="mt-8 p-6 bg-slate-50/50 rounded-xl border border-slate-200">
-                  <div className="flex items-center gap-2 mb-6">
+                <div className="mt-8 p-6 bg-slate-50/50 rounded-xl border border-slate-200 space-y-6">
+                  <div className="flex items-center gap-2">
                     <User className="w-4 h-4 text-slate-400" />
                     <h4 className="font-bold text-slate-700 text-sm">Informações do empreendedor e empreendimento</h4>
                   </div>
+
+                  <EcosystemSelector
+                    selectedEmpreendedorId={formData.empreendedorId}
+                    selectedBarragemId={formData.barragemId}
+                    selectedBarragemNome={formData.nomeFazenda}
+                    cpfCnpjFallback={formData.cpfCnpj}
+                    showRtSelector={true}
+                    onSelectEmpreendedor={(emp: EmpreendedorMaster) => {
+                      setFormData(prev => ({
+                        ...prev,
+                        empreendedorId: emp.id,
+                        nomeEmpreendedor: emp.razao_social || prev.nomeEmpreendedor,
+                        cpfCnpj: emp.cpf_cnpj || prev.cpfCnpj,
+                        enderecoEmpreendimento: emp.endereco || prev.enderecoEmpreendimento,
+                        municipioEmpreendimento: emp.municipio || prev.municipioEmpreendimento,
+                        numCar: emp.num_car || prev.numCar,
+                        sistemaOrigem: emp.sistema_origem || prev.sistemaOrigem,
+                      }));
+                    }}
+                    onSelectBarragem={(bar: BarragemMaster) => {
+                      setFormData(prev => ({
+                        ...prev,
+                        barragemId: bar.id,
+                        nomeFazenda: bar.nome || prev.nomeFazenda,
+                        empreendedorId: bar.empreendedor_id || prev.empreendedorId,
+                        municipioEmpreendimento: bar.municipio || prev.municipioEmpreendimento,
+                        enderecoEmpreendimento: bar.localizacao || prev.enderecoEmpreendimento,
+                        latEixo: normalizeCoordinateToGMS(bar.lat_gms, bar.lat_decimal) || prev.latEixo,
+                        longEixo: normalizeCoordinateToGMS(bar.long_gms, bar.long_decimal) || prev.longEixo,
+                        sistemaOrigem: bar.sistema_origem || prev.sistemaOrigem,
+                      }));
+                    }}
+                    onSelectRT={(rt: ResponsavelTecnicoSearchItem) => {
+                      const matchedName = RT_LIST.find(
+                        opt => opt.trim().toLowerCase() === (rt.nome || '').trim().toLowerCase()
+                      );
+                      const artVinculada = rt.art || rt.arts?.[0]?.art || '';
+                      setFormData(prev => {
+                        const existingIndex = prev.responsaveisTecnicos.findIndex(
+                          item =>
+                            item.rtId === rt.id ||
+                            (item.nome === 'OUTRO' ? item.nomeOutro : item.nome).trim().toLowerCase() ===
+                              (rt.nome || '').trim().toLowerCase()
+                        );
+                        if (existingIndex >= 0) {
+                          const updated = [...prev.responsaveisTecnicos];
+                          const current = updated[existingIndex];
+                          updated[existingIndex] = {
+                            ...current,
+                            nome: matchedName || 'OUTRO',
+                            nomeOutro: matchedName ? '' : rt.nome,
+                            rtId: rt.id,
+                            registroProfissional: rt.registro_profissional || current.registroProfissional,
+                            cpf: rt.cpf || current.cpf,
+                            registeredInAdministra: true,
+                            sistemaOrigem: rt.sistema_origem,
+                            arts: current.arts.length > 0
+                              ? current.arts.map((a, idx) =>
+                                  idx === 0 && !a.numero && artVinculada ? { ...a, numero: artVinculada } : a
+                                )
+                              : [{ numero: artVinculada, atividades: [], folha: '' }],
+                          };
+                          return { ...prev, responsaveisTecnicos: updated };
+                        }
+                        const newEntry: RTRejectionEntry = {
+                          id: crypto.randomUUID(),
+                          nome: matchedName || 'OUTRO',
+                          nomeOutro: matchedName ? '' : rt.nome,
+                          rtId: rt.id,
+                          registroProfissional: rt.registro_profissional || undefined,
+                          cpf: rt.cpf || undefined,
+                          registeredInAdministra: true,
+                          sistemaOrigem: rt.sistema_origem,
+                          arts: [{ numero: artVinculada, atividades: [], folha: '' }],
+                        };
+                        return { ...prev, responsaveisTecnicos: [...prev.responsaveisTecnicos, newEntry] };
+                      });
+                    }}
+                  />
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
@@ -1432,6 +1691,39 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
                         }}
                       />
                     </div>
+                    {(formData.empreendedorId || (formData.nomeEmpreendedor || '').trim().length >= 2) && (
+                      <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white">
+                        {formData.empreendedorId ? (
+                          <>
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Empreendedor cadastrado/vinculado no Administra
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setFormData(p => ({ ...p, empreendedorId: undefined }))}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-600 bg-slate-50 border border-slate-200 hover:bg-slate-100"
+                            >
+                              <Unlink className="w-3 h-3" /> Desvincular
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs font-medium text-amber-700">
+                              Empreendedor preenchido manualmente ainda não cadastrado no Administra.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleRegisterEmpreendedor}
+                              disabled={registeringEmp}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                            >
+                              {registeringEmp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+                              Cadastrar Empreendedor na base de dados
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
                     <div className="md:col-span-2">
                       <label className="text-[10px] font-black text-slate-500 uppercase block mb-1.5">Localização do empreendimento</label>
                       <input 
@@ -1481,10 +1773,10 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
                           <input 
                             type="text"
                             className="w-full h-10 pl-10 pr-3 py-2 bg-white border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
-                            placeholder="15104144"
+                            placeholder={GMS_PLACEHOLDER}
                             value={formData.latEixo}
-                            onChange={(e) => setFormData(p => ({ ...p, latEixo: formatGMS(e.target.value, true) }))}
-                            maxLength={12}
+                            onChange={(e) => setFormData(p => ({ ...p, latEixo: formatGmsInput(e.target.value, p.latEixo) }))}
+                            onBlur={() => setFormData(p => ({ ...p, latEixo: normalizeCoordinateToGMS(p.latEixo) }))}
                           />
                         </div>
                         <div className="relative">
@@ -1492,15 +1784,48 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
                           <input 
                             type="text"
                             className="w-full h-10 pl-12 pr-3 py-2 bg-white border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
-                            placeholder="54135682"
+                            placeholder={GMS_PLACEHOLDER}
                             value={formData.longEixo}
-                            onChange={(e) => setFormData(p => ({ ...p, longEixo: formatGMS(e.target.value, false) }))}
-                            maxLength={12}
+                            onChange={(e) => setFormData(p => ({ ...p, longEixo: formatGmsInput(e.target.value, p.longEixo) }))}
+                            onBlur={() => setFormData(p => ({ ...p, longEixo: normalizeCoordinateToGMS(p.longEixo) }))}
                           />
                         </div>
                       </div>
                       <MapPicker />
                     </div>
+                    {(formData.barragemId || (formData.nomeFazenda || '').trim().length >= 2 || (formData.latEixo || '').trim() || (formData.longEixo || '').trim()) && (
+                      <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white">
+                        {formData.barragemId ? (
+                          <>
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Barragem cadastrada/vinculada no Administra
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setFormData(p => ({ ...p, barragemId: undefined }))}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-600 bg-slate-50 border border-slate-200 hover:bg-slate-100"
+                            >
+                              <Unlink className="w-3 h-3" /> Desvincular
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs font-medium text-amber-700">
+                              Barragem preenchida manualmente ainda não cadastrada no Administra.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleRegisterBarragem}
+                              disabled={registeringBar}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                            >
+                              {registeringBar ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+                              Cadastrar Barragem na base de dados
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
 
                     <div>
                       <label className="text-[10px] font-black text-slate-500 uppercase block mb-1.5">Finalidade do barramento</label>

@@ -2,6 +2,7 @@ import React, { createContext, useState, useEffect, ReactNode, useContext } from
 import { ParecerData, OficioData, NoObligatoryData, RejectionData, TransferData } from '../../types';
 import { supabase } from '../supabaseClient';
 import { AuthContext } from './AuthContext';
+import { normalizeCoordinateToGMS } from '../utils/coordinateUtils';
 
 export type AppDocument = (
   | (ParecerData & { tipo_documento: 'Parecer Técnico' }) 
@@ -122,11 +123,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           sistemaOrigem: p.sistema_origem || baseData.sistemaOrigem || 'CLASSIFICA_CSB',
           
           responsaveisTecnicos: p.parecer_responsaveis?.length > 0 
-            ? p.parecer_responsaveis.map((rt: any) => ({
-                id: rt.id,
-                nome: rt.nome,
-                art: rt.art
-              }))
+            ? p.parecer_responsaveis.map((rt: any, idx: number) => {
+                const baseRt = Array.isArray(baseData.responsaveisTecnicos)
+                  ? (baseData.responsaveisTecnicos.find((b: any) => b.id === rt.id || (b.nome && b.nome === rt.nome && b.art === rt.art)) || baseData.responsaveisTecnicos[idx])
+                  : undefined;
+                const resolvedRtId = rt.rt_id || baseRt?.rtId || undefined;
+                return {
+                  id: rt.id,
+                  nome: rt.nome,
+                  art: rt.art,
+                  rtId: resolvedRtId,
+                  registroProfissional: baseRt?.registroProfissional,
+                  cpf: baseRt?.cpf,
+                  registeredInAdministra: Boolean(rt.registered_in_administra ?? resolvedRtId ?? baseRt?.registeredInAdministra),
+                  sistemaOrigem: baseRt?.sistemaOrigem,
+                };
+              })
             : baseData.responsaveisTecnicos || [],
 
           docsGerais: p.parecer_documentos?.filter((d: any) => d.grupo === 'Gerais').map((d: any) => ({ id: d.id, label: d.label, checked: d.checked, pageNumber: d.page_number, extraInput: d.extra_input })) || [],
@@ -144,8 +156,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             id: principalBar.id,
             nome: principalBar.nome,
             snisb: principalBar.snisb,
-            lat: principalBar.lat,
-            long: principalBar.long,
+            lat: normalizeCoordinateToGMS(principalBar.lat),
+            long: normalizeCoordinateToGMS(principalBar.long),
             alturaMaxima: principalBar.altura_maxima,
             alturaMaximaFls: principalBar.altura_maxima_fls,
             bordaLivre: principalBar.borda_livre,
@@ -173,6 +185,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             adequacaoLocalizacao: principalBar.adequacao_localizacao,
             adequacaoVazaoRemanescente: principalBar.adequacao_vazao_remanescente,
             adequacaoSeguranca: principalBar.adequacao_seguranca,
+            barragemId: principalBar.barragem_id || p.barragem_id || baseData.barragemId || baseData.barragemPrincipal?.barragemId,
+            sistemaOrigem: baseData.barragemPrincipal?.sistemaOrigem || p.sistema_origem || baseData.sistemaOrigem || 'CLASSIFICA_CSB',
             estruturas: principalBar.parecer_estruturas?.map((e: any) => ({
               id: e.id,
               descricao: e.descricao,
@@ -183,48 +197,55 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             })) || []
           } : {} as any,
 
-          barragensMontante: montanteBars.map((b: any) => ({
-            id: b.id,
-            nome: b.nome,
-            snisb: b.snisb,
-            lat: b.lat,
-            long: b.long,
-            alturaMaxima: b.altura_maxima,
-            alturaMaximaFls: b.altura_maxima_fls,
-            bordaLivre: b.borda_livre,
-            bordaLivreFls: b.borda_livre_fls,
-            cotaCoroamento: b.cota_coroamento,
-            cotaCoroamentoFls: b.cota_coroamento_fls,
-            comprimentoCoroamento: b.comprimento_coroamento,
-            comprimentoCoroamentoFls: b.comprimento_coroamento_fls,
-            larguraCoroamento: b.largura_coroamento,
-            larguraCoroamentoFls: b.largura_coroamento_fls,
-            tipoEstrutural: b.tipo_estrutural,
-            tipoFundacao: b.tipo_fundacao,
-            idade: b.idade,
-            scoreIdade: b.score_idade,
-            cotaNNO: b.cota_nno,
-            cotaNMM: b.cota_nmm,
-            areaNNO: b.area_nno,
-            areaNMM: b.area_nmm,
-            volumeNMO: b.volume_nmo,
-            volumeNMM: b.volume_nmm,
-            vazaoMaxima: b.vazao_maxima,
-            possuiAdequacao: b.possui_adequacao,
-            adequacaoVazao: b.adequacao_vazao,
-            adequacaoCota: b.adequacao_cota,
-            adequacaoLocalizacao: b.adequacao_localizacao,
-            adequacaoVazaoRemanescente: b.adequacao_vazao_remanescente,
-            adequacaoSeguranca: b.adequacao_seguranca,
-            estruturas: b.parecer_estruturas?.map((e: any) => ({
-              id: e.id,
-              descricao: e.descricao,
-              vazao: e.vazao,
-              cotaSoleira: e.cota_soleira,
-              localizacao: e.localizacao,
-              seguranca: e.seguranca
-            })) || []
-          })),
+          barragensMontante: montanteBars.map((b: any, idx: number) => {
+            const baseMont = Array.isArray(baseData.barragensMontante)
+              ? (baseData.barragensMontante.find((bm: any) => bm.id === b.id || (bm.nome && bm.nome === b.nome)) || baseData.barragensMontante[idx])
+              : undefined;
+            return {
+              id: b.id,
+              nome: b.nome,
+              snisb: b.snisb,
+              lat: normalizeCoordinateToGMS(b.lat),
+              long: normalizeCoordinateToGMS(b.long),
+              alturaMaxima: b.altura_maxima,
+              alturaMaximaFls: b.altura_maxima_fls,
+              bordaLivre: b.borda_livre,
+              bordaLivreFls: b.borda_livre_fls,
+              cotaCoroamento: b.cota_coroamento,
+              cotaCoroamentoFls: b.cota_coroamento_fls,
+              comprimentoCoroamento: b.comprimento_coroamento,
+              comprimentoCoroamentoFls: b.comprimento_coroamento_fls,
+              larguraCoroamento: b.largura_coroamento,
+              larguraCoroamentoFls: b.largura_coroamento_fls,
+              tipoEstrutural: b.tipo_estrutural,
+              tipoFundacao: b.tipo_fundacao,
+              idade: b.idade,
+              scoreIdade: b.score_idade,
+              cotaNNO: b.cota_nno,
+              cotaNMM: b.cota_nmm,
+              areaNNO: b.area_nno,
+              areaNMM: b.area_nmm,
+              volumeNMO: b.volume_nmo,
+              volumeNMM: b.volume_nmm,
+              vazaoMaxima: b.vazao_maxima,
+              possuiAdequacao: b.possui_adequacao,
+              adequacaoVazao: b.adequacao_vazao,
+              adequacaoCota: b.adequacao_cota,
+              adequacaoLocalizacao: b.adequacao_localizacao,
+              adequacaoVazaoRemanescente: b.adequacao_vazao_remanescente,
+              adequacaoSeguranca: b.adequacao_seguranca,
+              barragemId: b.barragem_id || baseMont?.barragemId,
+              sistemaOrigem: baseMont?.sistemaOrigem,
+              estruturas: b.parecer_estruturas?.map((e: any) => ({
+                id: e.id,
+                descricao: e.descricao,
+                vazao: e.vazao,
+                cotaSoleira: e.cota_soleira,
+                localizacao: e.localizacao,
+                seguranca: e.seguranca
+              })) || []
+            };
+          }),
 
           classificacao: {
             dpa1Select: p.dpa1_select,
@@ -300,6 +321,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           status: (o.status || 'Rascunho') as 'Rascunho' | 'Concluído',
           tipo_documento: 'Ofício de Pendências' as const,
           municipio: o.data?.municipio || o.municipio || '',
+          lat: normalizeCoordinateToGMS(o.data?.lat ?? o.lat),
+          long: normalizeCoordinateToGMS(o.data?.long ?? o.long),
           created_at: o.created_at,
           empreendedorId: o.empreendedor_id || o.data?.empreendedorId,
           barragemId: o.barragem_id || o.data?.barragemId,
@@ -319,25 +342,52 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         console.warn('Tabela nao_obrigatoriedades ainda não disponível no Supabase:', nError.message || nError.code);
         setNoObligatoriedades([]);
       } else if (nData) {
-        const mappedNoObligatoriedades: NoObligatoryData[] = nData.map(n => ({
-          ...n.data,
-          data: n.data,
-          id: n.id,
-          userId: n.user_id,
-          analista: n.analista,
-          processo: n.processo,
-          status: (n.status || 'Rascunho') as 'Rascunho' | 'Concluído',
-          tipo_documento: 'Não Obrigatoriedade' as const,
-          municipio: n.municipio,
-          lat: n.lat,
-          long: n.long,
-          empreendedor: n.empreendedor,
-          created_at: n.created_at,
-          updated_at: n.updated_at,
-          empreendedorId: n.empreendedor_id || n.data?.empreendedorId,
-          barragemId: n.barragem_id || n.data?.barragemId,
-          sistemaOrigem: n.sistema_origem || n.data?.sistemaOrigem || 'CLASSIFICA_CSB',
-        }));
+        const mappedNoObligatoriedades: NoObligatoryData[] = nData.map(n => {
+          const normalizedData = n.data
+            ? {
+                ...n.data,
+                damInfo: n.data.damInfo
+                  ? {
+                      ...n.data.damInfo,
+                      principal: n.data.damInfo.principal
+                        ? {
+                            ...n.data.damInfo.principal,
+                            lat: normalizeCoordinateToGMS(n.data.damInfo.principal.lat || n.lat),
+                            long: normalizeCoordinateToGMS(n.data.damInfo.principal.long || n.long),
+                          }
+                        : n.data.damInfo.principal,
+                      upstreamDams: Array.isArray(n.data.damInfo.upstreamDams)
+                        ? n.data.damInfo.upstreamDams.map((d: any) => ({
+                            ...d,
+                            lat: normalizeCoordinateToGMS(d.lat),
+                            long: normalizeCoordinateToGMS(d.long),
+                          }))
+                        : n.data.damInfo.upstreamDams,
+                    }
+                  : n.data.damInfo,
+              }
+            : n.data;
+
+          return {
+            ...normalizedData,
+            data: normalizedData,
+            id: n.id,
+            userId: n.user_id,
+            analista: n.analista,
+            processo: n.processo,
+            status: (n.status || 'Rascunho') as 'Rascunho' | 'Concluído',
+            tipo_documento: 'Não Obrigatoriedade' as const,
+            municipio: n.municipio,
+            lat: normalizeCoordinateToGMS(n.lat || n.data?.damInfo?.principal?.lat),
+            long: normalizeCoordinateToGMS(n.long || n.data?.damInfo?.principal?.long),
+            empreendedor: n.empreendedor,
+            created_at: n.created_at,
+            updated_at: n.updated_at,
+            empreendedorId: n.empreendedor_id || n.data?.empreendedorId,
+            barragemId: n.barragem_id || n.data?.barragemId,
+            sistemaOrigem: n.sistema_origem || n.data?.sistemaOrigem || 'CLASSIFICA_CSB',
+          };
+        });
 
         setNoObligatoriedades(mappedNoObligatoriedades);
       }
@@ -373,8 +423,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             nomeFazenda: i.nome_fazenda || baseData.nomeFazenda,
             numCar: i.num_car || baseData.numCar || i.numCar,
             municipioEmpreendimento: i.municipio || baseData.municipioEmpreendimento,
-            latEixo: i.lat_eixo || baseData.latEixo,
-            longEixo: i.long_eixo || baseData.longEixo,
+            latEixo: normalizeCoordinateToGMS(i.lat_eixo || baseData.latEixo),
+            longEixo: normalizeCoordinateToGMS(i.long_eixo || baseData.longEixo),
             situacao: i.situacao || baseData.situacao,
             situacaoOutro: i.situacao_outro || baseData.situacaoOutro,
             situacaoEmpreendimento: i.situacao_empreendimento || baseData.situacaoEmpreendimento,
@@ -401,8 +451,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             created_at: i.created_at,
             updated_at: i.updated_at,
             municipio: i.municipio || baseData.municipio,
-            lat: i.lat_eixo || i.lat,
-            long: i.long_eixo || i.long,
+            lat: normalizeCoordinateToGMS(i.lat_eixo || i.lat || baseData.latEixo),
+            long: normalizeCoordinateToGMS(i.long_eixo || i.long || baseData.longEixo),
             empreendedor: i.nome_empreendedor || i.empreendedor,
             empreendedorId: i.empreendedor_id || baseData.empreendedorId,
             barragemId: i.barragem_id || baseData.barragemId,
@@ -437,12 +487,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           parecerTecnico: t.parecer_tecnico || '',
           dataParecerTecnico: t.data_parecer_tecnico || '',
           responsavelTecnico: t.responsavel_tecnico || '',
+          responsavelTecnicoId: t.responsavel_tecnico_id || undefined,
+          responsavelTecnicoRegistered: Boolean(t.responsavel_tecnico_registered || t.responsavel_tecnico_id),
           artNumero: t.art_numero || '',
           nomeFazenda: t.nome_fazenda || '',
           zonaEndereco: t.zona_endereco || 'Rural',
           municipio: t.municipio || '',
-          latGMS: t.lat_gms || '',
-          longGMS: t.long_gms || '',
+          latGMS: normalizeCoordinateToGMS(t.lat_gms),
+          longGMS: normalizeCoordinateToGMS(t.long_gms),
           barragemTipoClassificacao: t.barragem_tipo_classificacao || '',
           barragemTipoClassificacaoOutro: t.barragem_tipo_classificacao_outro || '',
           nomeCursoAgua: t.nome_curso_agua || '',
@@ -466,8 +518,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           tipo_documento: 'Transferência de Titularidade' as const,
           created_at: t.created_at,
           updated_at: t.updated_at,
-          lat: t.lat_gms,
-          long: t.long_gms,
+          lat: normalizeCoordinateToGMS(t.lat_gms),
+          long: normalizeCoordinateToGMS(t.long_gms),
           empreendedor: t.novo_proprietario,
           empreendedorId: t.empreendedor_id,
           barragemId: t.barragem_id,

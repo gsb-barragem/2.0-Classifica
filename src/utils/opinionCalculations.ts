@@ -33,7 +33,7 @@ export type ConclusaoCategoria =
   | 'PRE_CLASSIFICACAO'
   | 'PENDENTE';
 
-export const TEXTO_APROVADO_NAO_ENQUADRAMENTO_PNSB = `Com base nas informações e nos documentos constantes dos autos, bem como nos critérios de classificação aplicáveis, verificou-se que a barragem apresenta Dano Potencial Associado (DPA) [BAIXO/MÉDIO/ALTO], Categoria de Risco (CRI) [BAIXA/MÉDIA/ALTA] e volume total do reservatório, correspondente ao Nível Máximo Maximorum (NMM), de [volume] hm³.
+export const TEXTO_APROVADO_NAO_ENQUADRAMENTO_PNSB = `Com base nas informações e nos documentos constantes dos autos, bem como nos critérios de classificação aplicáveis, verificou-se que a barragem apresenta Dano Potencial Associado (DPA) [BAIXO/MÉDIO/ALTO] e volume total do reservatório, correspondente ao Nível Máximo Maximorum (NMM), de [volume] hm³.
 
 Considerando os critérios legais de inclusão previstos no art. 1º, parágrafo único, da Lei nº 12.334/2010, com as alterações da Lei nº 14.066/2020, conclui-se que a barragem não se enquadra na Política Nacional de Segurança de Barragens (PNSB), uma vez que não atende aos critérios de inclusão aplicáveis, conforme os dados analisados neste processo. Por essa razão, não lhe é atribuída classe final A, B, C ou D neste parecer.
 
@@ -400,9 +400,9 @@ export const deriveClassification = (formData: ParecerData): DerivedClassificati
     pendingFields: pnsbPending,
   };
 
-  // --- CRI (only when NOT pré-classificação) ---
+  // --- CRI (somente quando NÃO for pré-classificação e NÃO for não enquadrada na PNSB) ---
   let cri: DerivedCriResult | null = null;
-  if (!isPreClassificacao) {
+  if (!isPreClassificacao && pnsbStatus !== 'nao_enquadrada') {
     const criPending: string[] = [];
 
     const scoreCt1 = getCt1FromHeight(alturaValida);
@@ -636,6 +636,33 @@ export const deriveClassification = (formData: ParecerData): DerivedClassificati
     };
   }
 
+  if (pnsbStatus === 'nao_enquadrada') {
+    const naoEnqReady =
+      isDpaComplete &&
+      dpaClass !== null &&
+      alturaAvaliada &&
+      volumeAvaliado &&
+      pnsbPending.length === 0;
+
+    return {
+      isPreClassificacao: false,
+      dpa,
+      cri: null,
+      pnsb,
+      resultado: {
+        categoria: naoEnqReady ? 'NAO_ENQUADRADA_PNSB' : 'PENDENTE',
+        label: naoEnqReady
+          ? 'NÃO SE ENQUADRA NA PNSB'
+          : 'PENDENTE — DADOS NECESSÁRIOS PARA CLASSIFICAÇÃO',
+        classeFinal: null,
+        pendingFields: naoEnqReady
+          ? missingUpstreamRelations
+          : [...dpaPending, ...pnsbPending, ...missingUpstreamRelations],
+        isComplete: naoEnqReady,
+      },
+    };
+  }
+
   const fullReady =
     isDpaComplete &&
     dpaClass !== null &&
@@ -848,11 +875,10 @@ Considerando os fatos e análises apresentadas, manifestamo-nos pelo deferimento
 Esta análise considera o uso e ocupação do solo atuais e poderá ser alterada caso sejam identificadas modificações nos critérios utilizados. Salienta-se que este parecer não autoriza a execução de obras no barramento, devendo o empreendedor obter previamente as devidas licenças ambientais nos termos da legislação vigente.`;
   }
 
-  // Não enquadramento na PNSB: preserva integralmente o texto aprovado
-  if (derived.resultado.categoria === 'NAO_ENQUADRADA_PNSB' && derived.cri?.risco) {
+  // Não enquadramento na PNSB: preserva integralmente o texto aprovado sem menção a CRI
+  if (derived.resultado.categoria === 'NAO_ENQUADRADA_PNSB') {
     return TEXTO_APROVADO_NAO_ENQUADRAMENTO_PNSB
       .replace('[BAIXO/MÉDIO/ALTO]', dpaClass.toUpperCase())
-      .replace('[BAIXA/MÉDIA/ALTA]', derived.cri.risco.toUpperCase())
       .replace('[volume]', volTexto);
   }
 

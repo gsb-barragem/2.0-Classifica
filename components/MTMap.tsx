@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import { renderToString } from 'react-dom/server';
 import { ShieldCheck, FileText, ClipboardList, Layers, X } from 'lucide-react';
 import { ParecerData, OficioData, NoObligatoryData, RejectionData } from '../types';
+import { normalizeCoordinateToGMS, parseGMSToDecimal } from '../src/utils/coordinateUtils';
 
 export function escapeHtml(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -16,65 +17,11 @@ export function escapeHtml(value: unknown): string {
 }
 
 export const parseGMS = (gms: string): number => {
-  if (!gms) return NaN;
-  // Format: 00°00'00,00"
-  const regex = /(\d+)°(\d+)'(\d+),(\d+)"/;
-  const match = gms.match(regex);
-  
-  if (!match) {
-    const val = parseFloat(gms.replace(',', '.'));
-    return val;
-  }
-  
-  const degrees = parseInt(match[1]);
-  const minutes = parseInt(match[2]);
-  const seconds = parseFloat(match[3] + '.' + match[4]);
-  
-  let decimal = degrees + (minutes / 60) + (seconds / 3600);
-  
-  // MT is South and West. If the user enters positive values, they are likely meant to be negative.
-  // We'll assume if degrees > 0 and it's not already negative, it should be negative for MT coordinates.
-  return -decimal; 
+  return parseGMSToDecimal(gms, true);
 };
 
 export const formatToGMS = (val: any): string => {
-  if (val === null || val === undefined || val === '') return '';
-  const str = String(val);
-  
-  // If it already looks like GMS, return it
-  if (str.includes('°')) return str;
-  
-  // If it's a number (decimal), convert it
-  const num = parseFloat(str.replace(',', '.'));
-  if (isNaN(num)) return str;
-  
-  const absolute = Math.abs(num);
-  let degrees = Math.floor(absolute);
-  let minutesNotTruncated = (absolute - degrees) * 60;
-  let minutes = Math.floor(minutesNotTruncated);
-  const secondsNotTruncated = (minutesNotTruncated - minutes) * 60;
-  let seconds = Math.floor(secondsNotTruncated);
-  let hundredths = Math.round((secondsNotTruncated - seconds) * 100);
-  
-  if (hundredths >= 100) {
-    hundredths = 0;
-    seconds++;
-  }
-  if (seconds >= 60) {
-    seconds = 0;
-    minutes++;
-  }
-  if (minutes >= 60) {
-    minutes = 0;
-    degrees++;
-  }
-  
-  const d = degrees.toString().padStart(2, '0');
-  const m = minutes.toString().padStart(2, '0');
-  const s = seconds.toString().padStart(2, '0');
-  const h = hundredths.toString().padStart(2, '0');
-  
-  return `${d}°${m}'${s},${h}"`;
+  return normalizeCoordinateToGMS(val);
 };
 
 interface MTMapProps {

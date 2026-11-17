@@ -15,6 +15,7 @@ export const Topic6ResultadoMatriz: React.FC<Topic6ResultadoMatrizProps> = ({
   onToggleSection,
 }) => {
   const { isPreClassificacao, dpa, cri, pnsb, resultado } = derived;
+  const hideCri = isPreClassificacao || pnsb.status === 'nao_enquadrada';
 
   const pnsbBadge =
     pnsb.status === 'enquadrada'
@@ -49,17 +50,21 @@ export const Topic6ResultadoMatriz: React.FC<Topic6ResultadoMatrizProps> = ({
         >
           <div className="flex items-center gap-2 text-left">
             <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-sm shrink-0">
-              {isPreClassificacao ? 5 : 6}
+              {hideCri ? 5 : 6}
             </div>
             <div>
               <h2 className="text-lg font-bold text-slate-800 group-hover:text-emerald-600 transition-colors">
                 {isPreClassificacao
                   ? 'RESUMO DA PRÉ-CLASSIFICAÇÃO (VOLUME E DPA)'
+                  : pnsb.status === 'nao_enquadrada'
+                  ? 'RESULTADO DA CLASSIFICAÇÃO'
                   : 'RESULTADO E MATRIZ DE CLASSIFICAÇÃO'}
               </h2>
               <p className="text-xs text-slate-500">
                 {isPreClassificacao
                   ? 'Apresentação exclusiva de Volume, DPA e enquadramento PNSB aplicável'
+                  : pnsb.status === 'nao_enquadrada'
+                  ? 'Volume, DPA e enquadramento legal na PNSB (sem atribuição de Classe A–D)'
                   : 'DPA, CRI, enquadramento legal na PNSB e matriz estadual SEMA/MT (Classes A–D)'}
               </p>
             </div>
@@ -130,7 +135,7 @@ export const Topic6ResultadoMatriz: React.FC<Topic6ResultadoMatrizProps> = ({
 
               <div
                 className={`grid grid-cols-1 ${
-                  isPreClassificacao ? 'sm:grid-cols-2' : 'sm:grid-cols-3'
+                  hideCri ? 'sm:grid-cols-2' : 'sm:grid-cols-3'
                 } gap-3`}
               >
                 <div className="bg-white p-3 rounded-lg border border-slate-200">
@@ -155,7 +160,7 @@ export const Topic6ResultadoMatriz: React.FC<Topic6ResultadoMatrizProps> = ({
                   </span>
                 </div>
 
-                {!isPreClassificacao && (
+                {!hideCri && (
                   <div className="bg-white p-3 rounded-lg border border-slate-200">
                     <span className="block text-[10px] font-bold text-slate-400 uppercase">
                       Categoria de Risco (CRI)
@@ -183,8 +188,8 @@ export const Topic6ResultadoMatriz: React.FC<Topic6ResultadoMatrizProps> = ({
               </div>
             </div>
 
-            {/* Matriz SEMA/MT (somente em classificação completa) */}
-            {!isPreClassificacao && (
+            {/* Matriz SEMA/MT (somente quando enquadrada/pendente fora da pré-classificação) */}
+            {!hideCri && (
               <div className="space-y-2">
                 <h3 className="text-xs font-bold text-slate-700 uppercase">
                   Matriz de Classificação Estadual (SEMA/MT — Classes A–D)

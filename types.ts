@@ -141,12 +141,19 @@ export interface BarramentoData {
   adequacaoLocalizacao?: string;
   adequacaoVazaoRemanescente?: string;
   adequacaoSeguranca?: string;
+  barragemId?: string;
+  sistemaOrigem?: SistemaOrigem;
 }
 
 export interface ResponsavelTecnicoEntry {
   id: string;
   nome: string;
   art: string;
+  rtId?: string;
+  registroProfissional?: string;
+  cpf?: string;
+  registeredInAdministra?: boolean;
+  sistemaOrigem?: SistemaOrigem;
 }
 
 export interface ParecerData {
@@ -254,6 +261,8 @@ export interface OficioData {
   userId?: string;
   protocolo: string;
   interessado: string;
+  cpfCnpj?: string;
+  barragemNome?: string;
   assunto: string;
   data: string;
   pendencias: string[];
@@ -263,7 +272,16 @@ export interface OficioData {
   prorrogacaoPrazo?: string;
   situacaoPendencia?: 'Pendente' | 'Cumprido' | 'Não cumprido' | 'Arquivado';
   anotacoesInternas?: string;
-  responsaveisTecnicos: { nome: string; nomeOutro: string; art: string }[];
+  responsaveisTecnicos: {
+    nome: string;
+    nomeOutro: string;
+    art: string;
+    rtId?: string;
+    registroProfissional?: string;
+    cpf?: string;
+    registeredInAdministra?: boolean;
+    sistemaOrigem?: SistemaOrigem;
+  }[];
   lat?: string;
   long?: string;
   municipio?: string;
@@ -334,6 +352,11 @@ export interface RTRejectionEntry {
   id: string;
   nome: string;
   nomeOutro?: string;
+  rtId?: string;
+  registroProfissional?: string;
+  cpf?: string;
+  registeredInAdministra?: boolean;
+  sistemaOrigem?: SistemaOrigem;
   arts: {
     numero: string;
     atividades: string[];
@@ -431,6 +454,8 @@ export interface TransferData {
   parecerTecnico: string;
   dataParecerTecnico?: string;
   responsavelTecnico: string;
+  responsavelTecnicoId?: string;
+  responsavelTecnicoRegistered?: boolean;
   artNumero: string;
   nomeFazenda: string;
   zonaEndereco: string;

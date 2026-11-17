@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
-import { ChevronDown, ChevronUp, Droplets, Plus, Trash2 } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronUp, Database, Droplets, Loader2, Plus, Trash2, Unlink } from 'lucide-react';
 import { OPS_TIPO_ESTRUTURAL, OPS_TIPO_FUNDACAO } from '../../constants';
 import { BarramentoData, EstruturaHidraulica } from '../../types';
 import {
@@ -10,17 +10,11 @@ import {
   evaluateCt5Age,
 } from '../../src/utils/opinionCalculations';
 import { parseGMS } from '../MTMap';
-
-const formatGMS = (value: string): string => {
-  const digits = (value || '').replace(/\D/g, '').slice(0, 8);
-  if (digits.length === 0) return '';
-  let formatted = digits.slice(0, 2);
-  if (digits.length > 2) formatted += '°' + digits.slice(2, 4);
-  if (digits.length > 4) formatted += "'" + digits.slice(4, 6);
-  if (digits.length > 6) formatted += ',' + digits.slice(6, 8);
-  if (digits.length === 8) formatted += '"';
-  return formatted;
-};
+import {
+  GMS_PLACEHOLDER,
+  formatGmsInput,
+  normalizeCoordinateToGMS,
+} from '../../src/utils/coordinateUtils';
 
 const MiniMap: React.FC<{ lat: string; long: string }> = ({ lat, long }) => {
   const mapRef = useRef<HTMLDivElement>(null);
@@ -99,6 +93,10 @@ interface BarramentoFormProps {
   isMain: boolean;
   idx?: number;
   readOnly?: boolean;
+  linkedBarragemId?: string;
+  registeringBarragemKey?: string | null;
+  onRegisterBarragem?: (isMain: boolean, idx: number, data: BarramentoData) => Promise<void>;
+  onUnlinkBarragem?: (isMain: boolean, idx: number) => void;
   updateBarramento: (
     isMain: boolean,
     idx: number,
@@ -122,15 +120,40 @@ const BarramentoForm: React.FC<BarramentoFormProps> = ({
   isMain,
   idx = 0,
   readOnly = false,
+  linkedBarragemId,
+  registeringBarragemKey,
+  onRegisterBarragem,
+  onUnlinkBarragem,
   updateBarramento,
   removeUpstreamDam,
   updateStructure,
   addStructure,
   removeStructure,
 }) => {
+  const effectiveBarragemId = isMain ? data.barragemId || linkedBarragemId : data.barragemId;
+  const regKey = isMain ? 'main' : `montante_${idx}`;
+  const isRegisteringHere = registeringBarragemKey === regKey;
+  const hasManualDamData = Boolean(data.nome.trim() || data.lat.trim() || data.long.trim());
   const ageEval = evaluateCt5Age(data.idade);
   const isSpecialAge =
     ageEval.modo === 'sem_enchimento' || ageEval.modo === 'sem_informacao';
+
+  useEffect(() => {
+    const rawLat = (data.lat || '').trim();
+    if (rawLat && !rawLat.includes('°') && /^-?\d{1,3}[.,]\d{3,}$/.test(rawLat)) {
+      const normalized = normalizeCoordinateToGMS(rawLat);
+      if (normalized && normalized !== data.lat) {
+        updateBarramento(isMain, idx, 'lat', normalized);
+      }
+    }
+    const rawLong = (data.long || '').trim();
+    if (rawLong && !rawLong.includes('°') && /^-?\d{1,3}[.,]\d{3,}$/.test(rawLong)) {
+      const normalized = normalizeCoordinateToGMS(rawLong);
+      if (normalized && normalized !== data.long) {
+        updateBarramento(isMain, idx, 'long', normalized);
+      }
+    }
+  }, [data.lat, data.long, isMain, idx, updateBarramento]);
 
   return (
     <div
@@ -218,6 +241,43 @@ const BarramentoForm: React.FC<BarramentoFormProps> = ({
           />
         </div>
 
+        {!readOnly && effectiveBarragemId && (
+          <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 text-xs text-emerald-800">
+            <span className="inline-flex items-center gap-1.5 font-semibold">
+              <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+              Barragem vinculada / cadastrada na base do Administra.
+            </span>
+            {onUnlinkBarragem && (
+              <button
+                type="button"
+                onClick={() => onUnlinkBarragem(isMain, idx)}
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-600 hover:text-red-600 px-2 py-0.5 rounded bg-white border border-slate-200"
+              >
+                <Unlink size={12} /> Desvincular
+              </button>
+            )}
+          </div>
+        )}
+
+        {!readOnly && !effectiveBarragemId && hasManualDamData && onRegisterBarragem && (
+          <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900">
+            <span>Barragem preenchida manualmente sem vínculo no Administra.</span>
+            <button
+              type="button"
+              disabled={isRegisteringHere}
+              onClick={() => void onRegisterBarragem(isMain, idx, data)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm disabled:opacity-60"
+            >
+              {isRegisteringHere ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Database size={13} />
+              )}
+              Cadastrar Barragem na base de dados
+            </button>
+          </div>
+        )}
+
         <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-bold text-slate-500 mb-1">
@@ -226,9 +286,14 @@ const BarramentoForm: React.FC<BarramentoFormProps> = ({
             <input
               type="text"
               value={data.lat}
-              onChange={(e) => updateBarramento(isMain, idx, 'lat', formatGMS(e.target.value))}
+              onChange={(e) =>
+                updateBarramento(isMain, idx, 'lat', formatGmsInput(e.target.value, data.lat))
+              }
+              onBlur={() =>
+                updateBarramento(isMain, idx, 'lat', normalizeCoordinateToGMS(data.lat))
+              }
               className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-3 md:p-2 text-sm md:text-xs focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none"
-              placeholder={'00°00\'00,00"'}
+              placeholder={GMS_PLACEHOLDER}
             />
           </div>
           <div>
@@ -238,9 +303,14 @@ const BarramentoForm: React.FC<BarramentoFormProps> = ({
             <input
               type="text"
               value={data.long}
-              onChange={(e) => updateBarramento(isMain, idx, 'long', formatGMS(e.target.value))}
+              onChange={(e) =>
+                updateBarramento(isMain, idx, 'long', formatGmsInput(e.target.value, data.long))
+              }
+              onBlur={() =>
+                updateBarramento(isMain, idx, 'long', normalizeCoordinateToGMS(data.long))
+              }
               className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-3 md:p-2 text-sm md:text-xs focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none"
-              placeholder={'00°00\'00,00"'}
+              placeholder={GMS_PLACEHOLDER}
             />
           </div>
           <MiniMap lat={data.lat} long={data.long} />
@@ -780,6 +850,10 @@ const BarramentoForm: React.FC<BarramentoFormProps> = ({
 interface Topic3BarramentosProps {
   barragemPrincipal: BarramentoData;
   barragensMontante: BarramentoData[];
+  barragemId?: string;
+  registeringBarragemKey?: string | null;
+  onRegisterBarragem?: (isMain: boolean, idx: number, data: BarramentoData) => Promise<void>;
+  onUnlinkBarragem?: (isMain: boolean, idx: number) => void;
   isOpen: boolean;
   readOnly?: boolean;
   onToggleSection: () => void;
@@ -805,6 +879,10 @@ interface Topic3BarramentosProps {
 export const Topic3Barramentos: React.FC<Topic3BarramentosProps> = ({
   barragemPrincipal,
   barragensMontante,
+  barragemId,
+  registeringBarragemKey,
+  onRegisterBarragem,
+  onUnlinkBarragem,
   isOpen,
   readOnly = false,
   onToggleSection,
@@ -848,6 +926,10 @@ export const Topic3Barramentos: React.FC<Topic3BarramentosProps> = ({
               data={barragemPrincipal}
               isMain={true}
               readOnly={readOnly}
+              linkedBarragemId={barragemId}
+              registeringBarragemKey={registeringBarragemKey}
+              onRegisterBarragem={onRegisterBarragem}
+              onUnlinkBarragem={onUnlinkBarragem}
               updateBarramento={updateBarramento}
               updateStructure={updateStructure}
               addStructure={addStructure}
@@ -883,6 +965,9 @@ export const Topic3Barramentos: React.FC<Topic3BarramentosProps> = ({
                 isMain={false}
                 idx={idx}
                 readOnly={readOnly}
+                registeringBarragemKey={registeringBarragemKey}
+                onRegisterBarragem={onRegisterBarragem}
+                onUnlinkBarragem={onUnlinkBarragem}
                 updateBarramento={updateBarramento}
                 updateStructure={updateStructure}
                 addStructure={addStructure}

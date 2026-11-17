@@ -294,8 +294,8 @@ const ParecerList: React.FC<ParecerListProps> = ({
       // Barramento Principal
       { header: 'Barragem Nome', getter: (d: any) => d.barragemPrincipal?.nome || '' },
       { header: 'SNISB', getter: (d: any) => d.barragemPrincipal?.snisb || '' },
-      { header: 'Latitude (GMS)', getter: (d: any) => formatToGMS(d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.lat : d.lat) },
-      { header: 'Longitude (GMS)', getter: (d: any) => formatToGMS(d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.long : d.long) },
+      { header: 'Latitude (GMS)', getter: (d: any) => formatToGMS(d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.lat : (d.lat || d.latGMS)) },
+      { header: 'Longitude (GMS)', getter: (d: any) => formatToGMS(d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.long : (d.long || d.longGMS)) },
       { header: 'Latitude (Decimal)', getter: (d: any) => {
         if (d.tipo_documento === 'Parecer Técnico') return d.barragemPrincipal?.lat;
         if (d.tipo_documento === 'Não Obrigatoriedade') return d.lat;

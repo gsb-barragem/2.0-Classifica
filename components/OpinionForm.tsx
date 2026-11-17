@@ -30,7 +30,6 @@ import { AuthContext } from '../src/contexts/AuthContext';
 import { logActivity } from '../src/lib/auditService';
 import {
   saveBarragemMaster,
-  saveEmpreendedorMaster,
   syncClassificaProductToAdministra,
 } from '../src/services/administraService';
 import { supabase } from '../src/supabaseClient';
@@ -41,6 +40,7 @@ import {
   getUpgOptionsForMunicipality,
   isPreClassificacaoTipo,
 } from '../src/utils/opinionCalculations';
+import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
 import { OperationType, handleSupabaseError } from '../src/utils/supabaseErrorHandler';
 import {
   BarramentoData,
@@ -49,7 +49,6 @@ import {
   DocItem,
   EstruturaHidraulica,
   ParecerData,
-  ResponsavelTecnicoEntry,
   RiscoEnum,
 } from '../types';
 import { OpinionPreviewSection } from './opinion/OpinionPreviewSection';
@@ -344,6 +343,8 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       const mergedPrincipal: BarramentoData = {
         ...INITIAL_DATA.barragemPrincipal,
         ...(initialData.barragemPrincipal || {}),
+        lat: normalizeCoordinateToGMS(initialData.barragemPrincipal?.lat),
+        long: normalizeCoordinateToGMS(initialData.barragemPrincipal?.long),
         estruturas:
           initialData.barragemPrincipal?.estruturas &&
           initialData.barragemPrincipal.estruturas.length > 0
@@ -400,6 +401,8 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         barragensMontante: (initialData.barragensMontante || []).map((bm, i) => ({
           ...createEmptyBarramento(`montante_${i}`, `Barragem a Montante ${i + 1}`),
           ...bm,
+          lat: normalizeCoordinateToGMS(bm.lat),
+          long: normalizeCoordinateToGMS(bm.long),
           relacaoBarragemPrincipal: bm.relacaoBarragemPrincipal || '',
           possuiAdequacao: Boolean(bm.possuiAdequacao),
           estruturas:
@@ -423,12 +426,6 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
   );
   const navRef = useRef<HTMLDivElement>(null);
 
-  const [newRT, setNewRT] = useState({
-    selectedName: '',
-    customName: '',
-    art: '',
-  });
-
   const [openSections, setOpenSections] = useState({
     introducao: true,
     pedido: true,
@@ -447,6 +444,9 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
 
   const derived = useMemo(() => deriveClassification(formData), [formData]);
 
+  const hideCriSection =
+    derived.isPreClassificacao || derived.pnsb.status === 'nao_enquadrada';
+
   const sections = useMemo(() => {
     if (derived.isPreClassificacao) {
       return [
@@ -455,6 +455,18 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         { id: 'barramento', label: '3. Barramentos', icon: MapPin },
         { id: 'dpa', label: '4. Volume e DPA', icon: Droplets },
         { id: 'resultado', label: '5. Pré-Classificação', icon: Scale },
+        { id: 'parecer', label: '6. Parecer Conclusivo', icon: PenTool },
+        { id: 'revisar', label: '7. Revisão', icon: Eye },
+      ];
+    }
+
+    if (derived.pnsb.status === 'nao_enquadrada') {
+      return [
+        { id: 'introducao', label: '1. Introdução', icon: FileText },
+        { id: 'pedido', label: '2. Empreendedor e Pedido', icon: Activity },
+        { id: 'barramento', label: '3. Barramentos', icon: MapPin },
+        { id: 'dpa', label: '4. Volume e DPA', icon: Droplets },
+        { id: 'resultado', label: '5. Resultado', icon: Scale },
         { id: 'parecer', label: '6. Parecer Conclusivo', icon: PenTool },
         { id: 'revisar', label: '7. Revisão', icon: Eye },
       ];
@@ -470,7 +482,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       { id: 'parecer', label: '7. Parecer Conclusivo', icon: PenTool },
       { id: 'revisar', label: '8. Revisão', icon: Eye },
     ];
-  }, [derived.isPreClassificacao]);
+  }, [derived.isPreClassificacao, derived.pnsb.status]);
 
   const currentStepIndex = Math.max(
     0,
@@ -597,35 +609,6 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
   };
 
   // --- RT Handlers ---
-  const handleAddRT = () => {
-    if ((!newRT.selectedName && !newRT.customName) || !newRT.art.trim()) {
-      toast.error(
-        'Por favor, selecione ou digite o nome do Responsável Técnico e o número da ART.'
-      );
-      return;
-    }
-
-    const name =
-      newRT.selectedName === 'OUTRO' ? newRT.customName.trim() : newRT.selectedName.trim();
-    if (!name) {
-      toast.error('Por favor, digite o nome do Responsável Técnico.');
-      return;
-    }
-
-    const entry: ResponsavelTecnicoEntry = {
-      id: Date.now().toString(),
-      nome: name,
-      art: newRT.art.trim(),
-    };
-
-    setFormData((prev) => ({
-      ...prev,
-      responsaveisTecnicos: [...prev.responsaveisTecnicos, entry],
-    }));
-
-    setNewRT({ selectedName: '', customName: '', art: '' });
-  };
-
   const handleRemoveRT = (id: string) => {
     setFormData((prev) => ({
       ...prev,
@@ -798,10 +781,11 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     }));
   };
 
-  // Snapshot compatível com persistência e DOCX existente sem converter pendências em 0 nem armazenar CRI em pré-classificação
+  // Snapshot compatível com persistência e DOCX existente sem converter pendências em 0 nem armazenar CRI quando não aplicável
   const buildCompatSnapshot = (): ParecerData => {
     const cls = formData.classificacao;
     const isPre = derived.isPreClassificacao;
+    const omitCri = isPre || derived.pnsb.status === 'nao_enquadrada';
     const nullableScore = (value: number | null | undefined): number =>
       (value ?? null) as unknown as number;
 
@@ -809,10 +793,14 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       ...formData,
       barragemPrincipal: {
         ...formData.barragemPrincipal,
+        lat: normalizeCoordinateToGMS(formData.barragemPrincipal.lat),
+        long: normalizeCoordinateToGMS(formData.barragemPrincipal.long),
         scoreIdade: evaluateCt5Age(formData.barragemPrincipal.idade).score,
       },
       barragensMontante: (formData.barragensMontante || []).map((bm) => ({
         ...bm,
+        lat: normalizeCoordinateToGMS(bm.lat),
+        long: normalizeCoordinateToGMS(bm.long),
         scoreIdade: evaluateCt5Age(bm.idade).score,
       })),
       classificacao: {
@@ -825,7 +813,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         scoreDpa4: nullableScore(derived.dpa.scoreDpa4),
         totalDpa: nullableScore(derived.dpa.totalDpa),
         dpaClass: (derived.dpa.dpaClass || '') as DanoEnum,
-        ...(isPre
+        ...(omitCri
           ? {
               scoreCt1: nullableScore(null),
               scoreCt2: nullableScore(null),
@@ -894,6 +882,106 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     };
   };
 
+  const [registeringBarragemKey, setRegisteringBarragemKey] = useState<string | null>(null);
+
+  const handleRegisterBarragem = async (isMain: boolean, idx: number, data: BarramentoData) => {
+    if (!currentUser) {
+      toast.error('Usuário não autenticado para cadastrar no Administra Barragens.');
+      return;
+    }
+    if (!data.nome?.trim()) {
+      toast.warning('Informe o nome da barragem antes de cadastrar na base de dados.');
+      return;
+    }
+
+    const regKey = isMain ? 'main' : `montante_${idx}`;
+    setRegisteringBarragemKey(regKey);
+    try {
+      const barRes = await saveBarragemMaster(
+        {
+          id: isMain ? formData.barragemId || data.barragemId : data.barragemId,
+          empreendedor_id: formData.empreendedorId || undefined,
+          snisb: data.snisb || undefined,
+          nome: data.nome,
+          municipio: formData.municipio || '',
+          upg: formData.upg,
+          sub_bacia: formData.subBacia,
+          curso_agua: formData.cursoAgua,
+          localizacao: formData.localizacao,
+          lat_gms: normalizeCoordinateToGMS(data.lat) || data.lat,
+          long_gms: normalizeCoordinateToGMS(data.long) || data.long,
+          altura_maxima: data.alturaMaxima,
+          comprimento_coroamento: data.comprimentoCoroamento,
+          largura_coroamento: data.larguraCoroamento,
+          volume_nmo: data.volumeNMO,
+          volume_nmm: data.volumeNMM,
+          tipo_estrutural: data.tipoEstrutural,
+          tipo_fundacao: data.tipoFundacao,
+          finalidade: formData.finalidade,
+          situacao: formData.situacaoEmpreendimento,
+          dpa_atual: isMain ? derived.dpa.dpaClass || undefined : undefined,
+          cri_atual:
+            isMain && !derived.isPreClassificacao ? derived.cri?.risco || undefined : undefined,
+          sistema_origem: data.sistemaOrigem || formData.sistemaOrigem,
+        },
+        currentUser
+      );
+
+      if (barRes.success && barRes.data?.id) {
+        const registeredId = barRes.data.id;
+        const orig = barRes.data.sistema_origem || 'CLASSIFICA_CSB';
+        setFormData((prev) => {
+          if (isMain) {
+            return {
+              ...prev,
+              barragemId: registeredId,
+              sistemaOrigem: orig,
+              barragemPrincipal: {
+                ...prev.barragemPrincipal,
+                barragemId: registeredId,
+                sistemaOrigem: orig,
+              },
+            };
+          }
+          const updatedMont = [...(prev.barragensMontante || [])];
+          if (updatedMont[idx]) {
+            updatedMont[idx] = {
+              ...updatedMont[idx],
+              barragemId: registeredId,
+              sistemaOrigem: orig,
+            };
+          }
+          return { ...prev, barragensMontante: updatedMont };
+        });
+        toast.success(`Barragem "${barRes.data.nome}" cadastrada na base do Administra Barragens.`);
+      } else {
+        toast.error(barRes.message || 'Não foi possível cadastrar a barragem na base de dados.');
+      }
+    } finally {
+      setRegisteringBarragemKey(null);
+    }
+  };
+
+  const handleUnlinkBarragem = (isMain: boolean, idx: number) => {
+    setFormData((prev) => {
+      if (isMain) {
+        return {
+          ...prev,
+          barragemId: undefined,
+          barragemPrincipal: {
+            ...prev.barragemPrincipal,
+            barragemId: undefined,
+          },
+        };
+      }
+      const updatedMont = [...(prev.barragensMontante || [])];
+      if (updatedMont[idx]) {
+        updatedMont[idx] = { ...updatedMont[idx], barragemId: undefined };
+      }
+      return { ...prev, barragensMontante: updatedMont };
+    });
+  };
+
   const getConclusaoPendencias = (): string[] => {
     const missingUpstreamRelations = (formData.barragensMontante || [])
       .map((bm, i) =>
@@ -903,12 +991,52 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       )
       .filter((v): v is string => Boolean(v));
 
-    if (derived.resultado.isComplete && missingUpstreamRelations.length === 0) {
+    const administraPendencias: string[] = [];
+    if (formData.razaoSocial?.trim() && !formData.empreendedorId) {
+      administraPendencias.push('Cadastrar Empreendedor na base de dados do Administra');
+    }
+
+    const principalFilled = Boolean(
+      formData.barragemPrincipal?.nome?.trim() ||
+        formData.barragemPrincipal?.lat?.trim() ||
+        formData.barragemPrincipal?.long?.trim()
+    );
+    if (principalFilled && !(formData.barragemId || formData.barragemPrincipal?.barragemId)) {
+      administraPendencias.push('Cadastrar Barragem Principal na base de dados do Administra');
+    }
+
+    (formData.barragensMontante || []).forEach((bm, i) => {
+      const filled = Boolean(bm.nome?.trim() || bm.lat?.trim() || bm.long?.trim());
+      if (filled && !bm.barragemId) {
+        administraPendencias.push(
+          `Cadastrar Barragem a Montante (${bm.nome || `Barragem ${i + 1}`}) na base de dados do Administra`
+        );
+      }
+    });
+
+    (formData.responsaveisTecnicos || []).forEach((rt, i) => {
+      if (rt.nome?.trim() && !(rt.rtId || rt.registeredInAdministra)) {
+        administraPendencias.push(
+          `Cadastrar Responsável Técnico (${rt.nome || `RT ${i + 1}`}) na base de dados do Administra`
+        );
+      }
+    });
+
+    if (
+      derived.resultado.isComplete &&
+      missingUpstreamRelations.length === 0 &&
+      administraPendencias.length === 0
+    ) {
       return [];
     }
 
+    const basePending =
+      derived.pnsb.status === 'nao_enquadrada'
+        ? [...derived.dpa.pendingFields, ...derived.pnsb.pendingFields]
+        : derived.resultado.pendingFields;
+
     return Array.from(
-      new Set([...derived.resultado.pendingFields, ...missingUpstreamRelations])
+      new Set([...basePending, ...missingUpstreamRelations, ...administraPendencias])
     );
   };
 
@@ -1064,12 +1192,15 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         risco: snapshot.classificacao.risco || null,
         resumo: snapshot.classificacao.resumo,
         empreendedor_id: snapshot.empreendedorId || null,
-        barragem_id: snapshot.barragemId || null,
+        barragem_id: snapshot.barragemId || snapshot.barragemPrincipal?.barragemId || null,
         sistema_origem: snapshot.sistemaOrigem || 'CLASSIFICA_CSB',
         data: {
           empreendedorId: snapshot.empreendedorId || null,
-          barragemId: snapshot.barragemId || null,
+          barragemId: snapshot.barragemId || snapshot.barragemPrincipal?.barragemId || null,
           sistemaOrigem: snapshot.sistemaOrigem || 'CLASSIFICA_CSB',
+          responsaveisTecnicos: snapshot.responsaveisTecnicos || [],
+          barragemPrincipal: snapshot.barragemPrincipal,
+          barragensMontante: snapshot.barragensMontante || [],
         },
       };
 
@@ -1125,10 +1256,25 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
             parecer_id: actualParecerId,
             nome: rt.nome,
             art: rt.art,
+            rt_id: rt.rtId || null,
+            registered_in_administra: Boolean(rt.rtId || rt.registeredInAdministra),
           }))
         );
         if (respError) {
-          await handleSupabaseError(respError, OperationType.CREATE, 'parecer_responsaveis');
+          if (respError.code === '42703') {
+            const { error: respFallbackError } = await supabase.from('parecer_responsaveis').insert(
+              rts.map((rt) => ({
+                parecer_id: actualParecerId,
+                nome: rt.nome,
+                art: rt.art,
+              }))
+            );
+            if (respFallbackError) {
+              await handleSupabaseError(respFallbackError, OperationType.CREATE, 'parecer_responsaveis');
+            }
+          } else {
+            await handleSupabaseError(respError, OperationType.CREATE, 'parecer_responsaveis');
+          }
         }
       }
 
@@ -1220,49 +1366,70 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       ];
 
       for (const b of barramentos) {
-        const { data: savedBar, error: barError } = await supabase
+        const barInsertPayload = {
+          parecer_id: actualParecerId,
+          barragem_id: b.is_principal
+            ? snapshot.barragemId || b.data.barragemId || null
+            : b.data.barragemId || null,
+          nome: b.data.nome,
+          snisb: b.data.snisb,
+          lat: b.data.lat,
+          long: b.data.long,
+          altura_maxima: b.data.alturaMaxima,
+          altura_maxima_fls: b.data.alturaMaximaFls,
+          borda_livre: b.data.bordaLivre,
+          borda_livre_fls: b.data.bordaLivreFls,
+          cota_coroamento: b.data.cotaCoroamento,
+          cota_coroamento_fls: b.data.cotaCoroamentoFls,
+          comprimento_coroamento: b.data.comprimentoCoroamento,
+          comprimento_coroamento_fls: b.data.comprimentoCoroamentoFls,
+          largura_coroamento: b.data.larguraCoroamento,
+          largura_coroamento_fls: b.data.larguraCoroamentoFls,
+          tipo_estrutural: b.data.tipoEstrutural,
+          tipo_fundacao: b.data.tipoFundacao,
+          idade: b.data.idade,
+          score_idade: b.data.scoreIdade,
+          cota_nno: b.data.cotaNNO,
+          cota_nmm: b.data.cotaNMM,
+          area_nno: b.data.areaNNO,
+          area_nmm: b.data.areaNMM,
+          volume_nmo: b.data.volumeNMO,
+          volume_nmm: b.data.volumeNMM,
+          vazao_maxima: b.data.vazaoMaxima,
+          is_principal: b.is_principal,
+          ordem: b.ordem,
+          possui_adequacao: b.data.possuiAdequacao,
+          adequacao_vazao: b.data.adequacaoVazao,
+          adequacao_cota: b.data.adequacaoCota,
+          adequacao_localizacao: b.data.adequacaoLocalizacao,
+          adequacao_vazao_remanescente: b.data.adequacaoVazaoRemanescente,
+          adequacao_seguranca: b.data.adequacaoSeguranca,
+        };
+
+        let savedBar: any = null;
+        const { data: savedBarData, error: barError } = await supabase
           .from('parecer_barramentos')
-          .insert({
-            parecer_id: actualParecerId,
-            nome: b.data.nome,
-            snisb: b.data.snisb,
-            lat: b.data.lat,
-            long: b.data.long,
-            altura_maxima: b.data.alturaMaxima,
-            altura_maxima_fls: b.data.alturaMaximaFls,
-            borda_livre: b.data.bordaLivre,
-            borda_livre_fls: b.data.bordaLivreFls,
-            cota_coroamento: b.data.cotaCoroamento,
-            cota_coroamento_fls: b.data.cotaCoroamentoFls,
-            comprimento_coroamento: b.data.comprimentoCoroamento,
-            comprimento_coroamento_fls: b.data.comprimentoCoroamentoFls,
-            largura_coroamento: b.data.larguraCoroamento,
-            largura_coroamento_fls: b.data.larguraCoroamentoFls,
-            tipo_estrutural: b.data.tipoEstrutural,
-            tipo_fundacao: b.data.tipoFundacao,
-            idade: b.data.idade,
-            score_idade: b.data.scoreIdade,
-            cota_nno: b.data.cotaNNO,
-            cota_nmm: b.data.cotaNMM,
-            area_nno: b.data.areaNNO,
-            area_nmm: b.data.areaNMM,
-            volume_nmo: b.data.volumeNMO,
-            volume_nmm: b.data.volumeNMM,
-            vazao_maxima: b.data.vazaoMaxima,
-            is_principal: b.is_principal,
-            ordem: b.ordem,
-            possui_adequacao: b.data.possuiAdequacao,
-            adequacao_vazao: b.data.adequacaoVazao,
-            adequacao_cota: b.data.adequacaoCota,
-            adequacao_localizacao: b.data.adequacaoLocalizacao,
-            adequacao_vazao_remanescente: b.data.adequacaoVazaoRemanescente,
-            adequacao_seguranca: b.data.adequacaoSeguranca,
-          })
+          .insert(barInsertPayload)
           .select()
           .single();
 
         if (barError) {
-          await handleSupabaseError(barError, OperationType.CREATE, 'parecer_barramentos');
+          if (barError.code === '42703') {
+            const { barragem_id: _omitted, ...legacyBarPayload } = barInsertPayload;
+            const { data: fallbackBar, error: fallbackBarErr } = await supabase
+              .from('parecer_barramentos')
+              .insert(legacyBarPayload)
+              .select()
+              .single();
+            if (fallbackBarErr) {
+              await handleSupabaseError(fallbackBarErr, OperationType.CREATE, 'parecer_barramentos');
+            }
+            savedBar = fallbackBar;
+          } else {
+            await handleSupabaseError(barError, OperationType.CREATE, 'parecer_barramentos');
+          }
+        } else {
+          savedBar = savedBarData;
         }
 
         const structs = b.data.estruturas || [];
@@ -1283,76 +1450,30 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         }
       }
 
-      let empIdToSync = snapshot.empreendedorId || null;
-      let barIdToSync = snapshot.barragemId || null;
+      const empIdToSync = snapshot.empreendedorId || null;
+      const barIdToSync = snapshot.barragemId || snapshot.barragemPrincipal?.barragemId || null;
       const digitsDoc = (snapshot.cpfCnpj || '').replace(/\D/g, '');
-      if (!empIdToSync && (digitsDoc.length === 11 || digitsDoc.length === 14) && snapshot.razaoSocial) {
-        const empSync = await saveEmpreendedorMaster(
-          {
-            cpf_cnpj: digitsDoc,
-            razao_social: snapshot.razaoSocial,
-            endereco: snapshot.localizacao,
-            municipio: snapshot.municipio,
-            num_car: snapshot.numCAR,
-          },
-          currentUser
-        );
-        if (empSync.success && empSync.data?.id) {
-          empIdToSync = empSync.data.id;
-        }
-      }
-      if (!barIdToSync && snapshot.barragemPrincipal?.nome && snapshot.municipio) {
-        const barSync = await saveBarragemMaster(
-          {
-            empreendedor_id: empIdToSync || undefined,
-            snisb: snapshot.barragemPrincipal.snisb || undefined,
-            nome: snapshot.barragemPrincipal.nome,
-            municipio: snapshot.municipio,
-            upg: snapshot.upg,
-            sub_bacia: snapshot.subBacia,
-            curso_agua: snapshot.cursoAgua,
-            localizacao: snapshot.localizacao,
-            lat_gms: snapshot.barragemPrincipal.lat,
-            long_gms: snapshot.barragemPrincipal.long,
-            altura_maxima: snapshot.barragemPrincipal.alturaMaxima,
-            comprimento_coroamento: snapshot.barragemPrincipal.comprimentoCoroamento,
-            largura_coroamento: snapshot.barragemPrincipal.larguraCoroamento,
-            volume_nmo: snapshot.barragemPrincipal.volumeNMO,
-            volume_nmm: snapshot.barragemPrincipal.volumeNMM,
-            tipo_estrutural: snapshot.barragemPrincipal.tipoEstrutural,
-            tipo_fundacao: snapshot.barragemPrincipal.tipoFundacao,
-            finalidade: snapshot.finalidade,
-            situacao: snapshot.situacaoEmpreendimento,
-            dpa_atual: derived.dpa.dpaClass || undefined,
-            cri_atual: derived.isPreClassificacao
-              ? undefined
-              : derived.cri?.risco || undefined,
-          },
-          currentUser
-        );
-        if (barSync.success && barSync.data?.id) {
-          barIdToSync = barSync.data.id;
-        }
-      }
 
-      void syncClassificaProductToAdministra(
-        {
-          produto_origem_id: actualParecerId,
-          tipo_produto: 'Parecer Técnico',
-          numero_documento: snapshot.protocolo || null,
-          status,
-          data_documento: snapshot.data || null,
-          analista_nome: snapshot.analista || userName,
-          empreendedor_id: empIdToSync,
-          empreendedor_nome: snapshot.razaoSocial || null,
-          empreendedor_cpf_cnpj: digitsDoc || null,
-          barragem_id: barIdToSync,
-          barragem_nome: snapshot.barragemPrincipal?.nome || null,
-          barragem_snisb: snapshot.barragemPrincipal?.snisb || null,
-          municipio: snapshot.municipio || null,
-        },
-        currentUser
-      );
+      if (empIdToSync || barIdToSync) {
+        void syncClassificaProductToAdministra(
+          {
+            produto_origem_id: actualParecerId,
+            tipo_produto: 'Parecer Técnico',
+            numero_documento: snapshot.protocolo || null,
+            status,
+            data_documento: snapshot.data || null,
+            analista_nome: snapshot.analista || userName,
+            empreendedor_id: empIdToSync,
+            empreendedor_nome: snapshot.razaoSocial || null,
+            empreendedor_cpf_cnpj: digitsDoc || null,
+            barragem_id: barIdToSync,
+            barragem_nome: snapshot.barragemPrincipal?.nome || null,
+            barragem_snisb: snapshot.barragemPrincipal?.snisb || null,
+            municipio: snapshot.municipio || null,
+          },
+          currentUser
+        );
+      }
 
       toast.success(`Sucesso: Parecer salvo como ${status}!`);
       await logActivity(parecerId ? 'EDIT_OPINION' : 'CREATE_OPINION', {
@@ -1635,7 +1756,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
                 </span>
               </div>
 
-              {!derived.isPreClassificacao && (
+              {!hideCriSection && (
                 <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-xs text-slate-500 font-medium">CRI</span>
                   <span
@@ -1698,9 +1819,6 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
             formData={formData}
             isOpen={openSections.pedido}
             readOnly={readOnly}
-            newRT={newRT}
-            onSetNewRT={setNewRT}
-            onAddRT={handleAddRT}
             onRemoveRT={handleRemoveRT}
             onToggleSection={() => toggleSection('pedido')}
             onInputChange={handleInputChange}
@@ -1711,6 +1829,10 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
           <Topic3Barramentos
             barragemPrincipal={formData.barragemPrincipal}
             barragensMontante={formData.barragensMontante}
+            barragemId={formData.barragemId}
+            registeringBarragemKey={registeringBarragemKey}
+            onRegisterBarragem={handleRegisterBarragem}
+            onUnlinkBarragem={handleUnlinkBarragem}
             isOpen={openSections.barramento}
             readOnly={readOnly}
             onToggleSection={() => toggleSection('barramento')}
@@ -1731,7 +1853,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
             onClassificationChange={handleClassificationChange}
           />
 
-          {!derived.isPreClassificacao && derived.cri && (
+          {!hideCriSection && derived.cri && (
             <Topic5Cri
               classificacao={formData.classificacao}
               barragemPrincipal={formData.barragemPrincipal}

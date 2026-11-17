@@ -22,6 +22,7 @@ import {
 import { ParecerData, ProdutoEcossistemaResumo, SistemaOrigem, TransferData } from '../types';
 import { AppDocument, DataContext } from '../src/contexts/DataContext';
 import { getEcosystemStatus } from '../src/lib/ecosystemClients';
+import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
 import {
   AdministraCanonicalTable,
   AdministraReadError,
@@ -176,6 +177,37 @@ function getSummaryEntries(
     if (entries.length >= max) break;
   }
   return entries;
+}
+
+const COORD_EXCLUDE_PATTERNS: RegExp[] = [
+  /^lat$/i,
+  /^lat_gms$/i,
+  /^lat_decimal$/i,
+  /^latitude$/i,
+  /^latitude_gms$/i,
+  /^latitude_decimal$/i,
+  /^long$/i,
+  /^lng$/i,
+  /^long_gms$/i,
+  /^long_decimal$/i,
+  /^longitude$/i,
+  /^longitude_gms$/i,
+  /^longitude_decimal$/i,
+];
+
+function getBarragemCoordinatesGMS(bar: AdministraRecord | null | undefined): {
+  lat: string;
+  long: string;
+} {
+  const rawLat = pickField(bar, [/^lat_gms$/i, /^latitude_gms$/i, /^latitude$/i, /^lat$/i]);
+  const rawLatDec = pickField(bar, [/^lat_decimal$/i, /^latitude_decimal$/i]);
+  const rawLong = pickField(bar, [/^long_gms$/i, /^longitude_gms$/i, /^longitude$/i, /^long$/i, /^lng$/i]);
+  const rawLongDec = pickField(bar, [/^long_decimal$/i, /^longitude_decimal$/i]);
+
+  return {
+    lat: normalizeCoordinateToGMS(rawLat, rawLatDec),
+    long: normalizeCoordinateToGMS(rawLong, rawLongDec),
+  };
 }
 
 function normalizeMatchText(value?: string | null): string {
@@ -1003,19 +1035,26 @@ export const EcosystemHub: React.FC = () => {
                       barragens.map((item, idx) => {
                         const bar = item.record;
                         const barId = pickField(bar, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]);
-                        const summary = getSummaryEntries(bar, 3);
+                        const summary = getSummaryEntries(bar, 3, COORD_EXCLUDE_PATTERNS);
+                        const coords = getBarragemCoordinatesGMS(bar);
                         return (
                           <tr key={barId || String(idx)} className="hover:bg-slate-50/70 align-top">
                             <td className="px-5 py-4">
                               <div className="font-bold text-slate-800">{getBarragemLabel(bar)}</div>
                               {barId && <div className="text-[11px] font-mono text-slate-400 mt-0.5">{barId}</div>}
                             </td>
-                            <td className="px-5 py-4 text-xs text-slate-600 space-y-1">
+                            <td className="px-5 py-4 text-xs text-slate-600 space-y-1 max-w-xs break-words">
                               {summary.map(([k, v]) => (
-                                <div key={k} className="truncate max-w-xs">
+                                <div key={k} className="break-words">
                                   <span className="text-slate-400">{k}:</span> {v}
                                 </div>
                               ))}
+                              <div className="break-words font-mono text-slate-700">
+                                <span className="font-sans text-slate-400">LAT:</span> {coords.lat || '—'}
+                              </div>
+                              <div className="break-words font-mono text-slate-700">
+                                <span className="font-sans text-slate-400">LONG:</span> {coords.long || '—'}
+                              </div>
                             </td>
                             <td className="px-5 py-4 text-xs">
                               {item.empreendedor ? (

@@ -8,6 +8,7 @@ import {
   evaluateCt5Age,
   getQuadro7RegulatorioRows,
 } from '../../src/utils/opinionCalculations';
+import { normalizeCoordinateToGMS } from '../../src/utils/coordinateUtils';
 
 const TableCellPreview = ({
   value,
@@ -181,7 +182,11 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
           </tr>
           <tr>
             <TableCellPreview value="Coordenadas" bold />
-            <TableCellPreview value={`Lat: ${b.lat || ''} Long: ${b.long || ''}`} />
+            <TableCellPreview
+              value={`Lat: ${normalizeCoordinateToGMS(b.lat) || b.lat || ''} Long: ${
+                normalizeCoordinateToGMS(b.long) || b.long || ''
+              }`}
+            />
           </tr>
           <tr>
             <TableCellPreview value="Altura Máxima (m)" bold />
@@ -348,7 +353,7 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
         >
           <div className="flex items-center gap-2 text-left">
             <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-sm shrink-0">
-              {derived.isPreClassificacao ? 7 : 8}
+              {derived.isPreClassificacao || derived.pnsb.status === 'nao_enquadrada' ? 7 : 8}
             </div>
             <div>
               <h2 className="text-lg font-bold text-slate-800 group-hover:text-emerald-600 transition-colors uppercase">
@@ -599,8 +604,8 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
               </table>
               <p className="text-[9pt] italic mb-6">{formData.classificacao.legendaDPA}</p>
 
-              {/* CRI somente quando NÃO for pré-classificação */}
-              {!derived.isPreClassificacao && cri && (
+              {/* CRI somente quando NÃO for pré-classificação e NÃO for não enquadrada na PNSB */}
+              {!derived.isPreClassificacao && derived.pnsb.status !== 'nao_enquadrada' && cri && (
                 <>
                   <h3 className="font-bold mb-1 mt-4">4.3 Quanto à Categoria de Risco (CRI)</h3>
                   <p className="mb-4 text-justify">{criText}</p>
@@ -1039,7 +1044,7 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
                       }
                     />
                   </tr>
-                  {!derived.isPreClassificacao && (
+                  {!derived.isPreClassificacao && derived.pnsb.status !== 'nao_enquadrada' && (
                     <tr>
                       <TableCellPreview value="CATEGORIA DE RISCO:" bold />
                       <TableCellPreview
@@ -1054,7 +1059,13 @@ export const OpinionPreviewSection: React.FC<OpinionPreviewSectionProps> = ({
                   <tr>
                     <TableCellPreview value="Coordenadas:" bold />
                     <TableCellPreview
-                      value={`${formData.barragemPrincipal.lat} - ${formData.barragemPrincipal.long}`}
+                      value={`${
+                        normalizeCoordinateToGMS(formData.barragemPrincipal.lat) ||
+                        formData.barragemPrincipal.lat
+                      } - ${
+                        normalizeCoordinateToGMS(formData.barragemPrincipal.long) ||
+                        formData.barragemPrincipal.long
+                      }`}
                     />
                   </tr>
                   <tr>

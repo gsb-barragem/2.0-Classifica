@@ -25,7 +25,11 @@ import {
   Send,
   Copy,
   Edit3,
-  RotateCcw
+  RotateCcw,
+  Database,
+  Loader2,
+  UserPlus,
+  Unlink
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { saveAs } from 'file-saver';
@@ -35,7 +39,15 @@ import { getUpgsForMunicipality } from '../src/data/upgData';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { OPS_ANALISTA as ANALISTAS } from '../constants';
 import ConfirmModal from './ui/ConfirmModal';
-import { syncClassificaProductToAdministra } from '../src/services/administraService';
+import { BarragemMaster, EmpreendedorMaster, SistemaOrigem } from '../types';
+import { EcosystemSelector, ResponsavelTecnicoSearchItem } from './EcosystemSelector';
+import {
+  createResponsavelTecnicoInAdministra,
+  saveBarragemMaster,
+  saveEmpreendedorMaster,
+  syncClassificaProductToAdministra,
+} from '../src/services/administraService';
+import { GMS_PLACEHOLDER, formatGmsInput, normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
 import { 
   Document, 
   Packer, 
@@ -93,7 +105,12 @@ const INITIAL_DATA = {
   novoDoc: '',
   enquadradaPNSB: 'SIM',
   classeEnquadramento: 'A',
-  customPortariaText: null as string | null
+  customPortariaText: null as string | null,
+  empreendedorId: undefined as string | undefined,
+  barragemId: undefined as string | undefined,
+  responsavelTecnicoId: undefined as string | undefined,
+  responsavelTecnicoRegistered: false,
+  sistemaOrigem: 'CLASSIFICA_CSB' as SistemaOrigem,
 };
 
 interface TransferFormProps {
@@ -136,6 +153,9 @@ const MUNICIPIOS = [
 const TransferForm: React.FC<TransferFormProps> = ({ initialData, onBack, onSave, readOnly }) => {
   const { currentUser } = useContext(AuthContext);
   const [isSaving, setIsSaving] = useState(false);
+  const [registeringEmp, setRegisteringEmp] = useState(false);
+  const [registeringBar, setRegisteringBar] = useState(false);
+  const [registeringRt, setRegisteringRt] = useState(false);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -156,9 +176,21 @@ const TransferForm: React.FC<TransferFormProps> = ({ initialData, onBack, onSave
 
   useEffect(() => {
     if (initialData) {
+      const rtId = initialData.responsavelTecnicoId || initialData.responsavel_tecnico_id;
       setFormData({
         ...INITIAL_DATA,
         ...initialData,
+        empreendedorId: initialData.empreendedorId || initialData.empreendedor_id,
+        barragemId: initialData.barragemId || initialData.barragem_id,
+        responsavelTecnicoId: rtId,
+        responsavelTecnicoRegistered: Boolean(
+          initialData.responsavelTecnicoRegistered ||
+          initialData.responsavel_tecnico_registered ||
+          rtId
+        ),
+        sistemaOrigem: initialData.sistemaOrigem || initialData.sistema_origem || 'CLASSIFICA_CSB',
+        latGMS: normalizeCoordinateToGMS(initialData.latGMS),
+        longGMS: normalizeCoordinateToGMS(initialData.longGMS),
         // Ensure docs are correctly handle if they exist in initialData
         docs: initialData.docs || INITIAL_DOCS.map(doc => ({ ...doc, checked: false, extraInput: '', pageNumber: '' }))
       });
@@ -178,23 +210,6 @@ const TransferForm: React.FC<TransferFormProps> = ({ initialData, onBack, onSave
       }
     }
   }, [currentUser, initialData, formData.analista]);
-
-  const maskGMS = (value: string, type: 'Lat' | 'Long') => {
-    const digits = (value || '').replace(/\D/g, '');
-    if (!digits) return '';
-    
-    let res = '';
-    if (digits.length > 0) res += digits.substring(0, 2);
-    if (digits.length > 2) res += '°' + digits.substring(2, 4);
-    if (digits.length > 4) res += '’' + digits.substring(4, 6);
-    if (digits.length > 6) res += ',' + digits.substring(6, 8);
-    
-    if (digits.length >= 8) {
-      res = res.substring(0, 11) + '¨';
-    }
-    
-    return res + (type === 'Lat' ? 'S' : 'O');
-  };
 
   const getClassificacaoVolume = (volume: string) => {
     const val = parseFloat((volume || '').replace(',', '.'));
@@ -730,8 +745,8 @@ GSALARH/SEMA-MT`;
       nome_fazenda: formData.nomeFazenda,
       zona_endereco: formData.zonaEndereco,
       municipio: formData.municipio,
-      lat_gms: formData.latGMS,
-      long_gms: formData.longGMS,
+      lat_gms: normalizeCoordinateToGMS(formData.latGMS),
+      long_gms: normalizeCoordinateToGMS(formData.longGMS),
       barragem_tipo_classificacao: formData.barragemTipoClassificacao,
       barragem_tipo_classificacao_outro: formData.barragemTipoClassificacaoOutro,
       nome_curso_agua: formData.nomeCursoAgua,
@@ -755,9 +770,11 @@ GSALARH/SEMA-MT`;
       classe_enquadramento: formData.classeEnquadramento,
       docs: formData.docs,
       custom_portaria_text: formData.customPortariaText,
-      empreendedor_id: (formData as any).empreendedorId || null,
-      barragem_id: (formData as any).barragemId || null,
-      sistema_origem: (formData as any).sistemaOrigem || 'CLASSIFICA_CSB',
+      empreendedor_id: formData.empreendedorId || null,
+      barragem_id: formData.barragemId || null,
+      responsavel_tecnico_id: formData.responsavelTecnicoId || null,
+      responsavel_tecnico_registered: Boolean(formData.responsavelTecnicoId || formData.responsavelTecnicoRegistered),
+      sistema_origem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
     };
 
     if (initialData?.id) {
@@ -770,7 +787,14 @@ GSALARH/SEMA-MT`;
       .select('id');
 
     if (upsertRes.error?.code === '42703') {
-      const { empreendedor_id: _e, barragem_id: _b, sistema_origem: _s, ...legacyDbData } = dbData;
+      const {
+        empreendedor_id: _e,
+        barragem_id: _b,
+        responsavel_tecnico_id: _rt,
+        responsavel_tecnico_registered: _rtr,
+        sistema_origem: _s,
+        ...legacyDbData
+      } = dbData;
       upsertRes = await supabase
         .from('transferencias_titularidade')
         .upsert([legacyDbData])
@@ -789,10 +813,10 @@ GSALARH/SEMA-MT`;
           status: status === 'concluido' ? 'Concluído' : 'Rascunho',
           data_documento: formData.dataProtocolo || null,
           analista_nome: formData.analista || currentUser?.name || null,
-          empreendedor_id: (formData as any).empreendedorId || null,
+          empreendedor_id: formData.empreendedorId || null,
           empreendedor_nome: formData.novoProprietario || null,
           empreendedor_cpf_cnpj: formData.novoDoc || null,
-          barragem_id: (formData as any).barragemId || null,
+          barragem_id: formData.barragemId || null,
           barragem_nome: formData.nomeFazenda || null,
           barragem_snisb: formData.snisb || null,
           municipio: formData.municipio || null,
@@ -802,7 +826,172 @@ GSALARH/SEMA-MT`;
     }
   };
 
+  const handleRegisterEmpreendedor = async () => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado para cadastrar na base de dados.');
+      return;
+    }
+    const nome = (formData.novoProprietario || '').trim();
+    if (nome.length < 2) {
+      toast.error('Informe o nome do Novo Proprietário antes de cadastrar.');
+      return;
+    }
+    setRegisteringEmp(true);
+    try {
+      const res = await saveEmpreendedorMaster(
+        {
+          id: formData.empreendedorId || undefined,
+          razao_social: nome,
+          cpf_cnpj: formData.novoDoc || undefined,
+          tipo_pessoa: formData.novoTipoDoc === 'CNPJ' ? 'PJ' : 'PF',
+          municipio: formData.municipio || undefined,
+          sistema_origem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
+        },
+        currentUser
+      );
+      if (res.success && res.data) {
+        const digits = (res.data.cpf_cnpj || '').replace(/\D/g, '');
+        setFormData(prev => ({
+          ...prev,
+          empreendedorId: res.data!.id,
+          novoProprietario: res.data!.razao_social || prev.novoProprietario,
+          novoTipoDoc: digits.length === 14 ? 'CNPJ' : digits.length === 11 ? 'CPF' : prev.novoTipoDoc,
+          novoDoc: res.data!.cpf_cnpj || prev.novoDoc,
+          municipio: res.data!.municipio || prev.municipio,
+          sistemaOrigem: res.data!.sistema_origem || prev.sistemaOrigem,
+        }));
+        toast.success('Empreendedor (Novo Proprietário) cadastrado/vinculado na base do Administra.');
+      } else {
+        toast.error(res.message || 'Não foi possível cadastrar o empreendedor no Administra.');
+      }
+    } finally {
+      setRegisteringEmp(false);
+    }
+  };
+
+  const handleRegisterBarragem = async () => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado para cadastrar na base de dados.');
+      return;
+    }
+    const nome = (formData.nomeFazenda || '').trim() || (formData.novoProprietario || '').trim();
+    if (nome.length < 2 && !(formData.latGMS || '').trim() && !(formData.longGMS || '').trim()) {
+      toast.error('Informe o nome da fazenda/barragem ou coordenadas antes de cadastrar.');
+      return;
+    }
+    setRegisteringBar(true);
+    try {
+      const res = await saveBarragemMaster(
+        {
+          id: formData.barragemId || undefined,
+          nome: nome.length >= 2 ? nome : 'Barragem sem identificação',
+          snisb: formData.snisb || undefined,
+          empreendedor_id: formData.empreendedorId || undefined,
+          municipio: formData.municipio || undefined,
+          upg: formData.upg || undefined,
+          sub_bacia: formData.subBacia || undefined,
+          curso_agua: formData.nomeCursoAgua || undefined,
+          zona: formData.zonaEndereco === 'Urbana' ? 'Urbana' : 'Rural',
+          lat_gms: normalizeCoordinateToGMS(formData.latGMS) || undefined,
+          long_gms: normalizeCoordinateToGMS(formData.longGMS) || undefined,
+          altura_maxima: formData.alturaMaxima || undefined,
+          volume_nmm: formData.volumeArmazenado || undefined,
+          tipo_estrutural: formData.tipoBarragem || undefined,
+          situacao: formData.situacaoEmpreendimento === 'OUTRO'
+            ? formData.situacaoEmpreendimentoOutro || undefined
+            : formData.situacaoEmpreendimento || undefined,
+          dpa_atual: formData.dpa || undefined,
+          cri_atual: formData.cri || undefined,
+          enquadramento_pnsb: formData.enquadradaPNSB === 'SIM',
+          sistema_origem: formData.sistemaOrigem || 'CLASSIFICA_CSB',
+        },
+        currentUser
+      );
+      if (res.success && res.data) {
+        setFormData(prev => ({
+          ...prev,
+          barragemId: res.data!.id,
+          nomeFazenda: res.data!.nome || prev.nomeFazenda,
+          snisb: res.data!.snisb || prev.snisb,
+          municipio: res.data!.municipio || prev.municipio,
+          latGMS: normalizeCoordinateToGMS(res.data!.lat_gms, res.data!.lat_decimal) || prev.latGMS,
+          longGMS: normalizeCoordinateToGMS(res.data!.long_gms, res.data!.long_decimal) || prev.longGMS,
+          sistemaOrigem: res.data!.sistema_origem || prev.sistemaOrigem,
+        }));
+        toast.success('Barragem cadastrada/vinculada na base do Administra.');
+      } else {
+        toast.error(res.message || 'Não foi possível cadastrar a barragem no Administra.');
+      }
+    } finally {
+      setRegisteringBar(false);
+    }
+  };
+
+  const handleRegisterRT = async () => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado para cadastrar na base de dados.');
+      return;
+    }
+    const nomeFinal = (formData.responsavelTecnico || '').trim();
+    if (nomeFinal.length < 2) {
+      toast.error('Informe o nome completo do Responsável Técnico antes de cadastrar.');
+      return;
+    }
+    setRegisteringRt(true);
+    try {
+      const res = await createResponsavelTecnicoInAdministra(
+        {
+          nome: nomeFinal,
+          art: formData.artNumero?.trim() || undefined,
+          barragemId: formData.barragemId || null,
+        },
+        currentUser
+      );
+      if (res.success && res.data?.rt) {
+        setFormData(prev => ({
+          ...prev,
+          responsavelTecnicoId: res.data!.rt.id,
+          responsavelTecnicoRegistered: true,
+        }));
+        toast.success(`Responsável Técnico "${nomeFinal}" cadastrado na base do Administra.`);
+        if (res.data.artSaveWarning) {
+          toast.warning(res.data.artSaveWarning);
+        }
+      } else {
+        toast.error(res.message || 'Não foi possível cadastrar o Responsável Técnico no Administra.');
+      }
+    } finally {
+      setRegisteringRt(false);
+    }
+  };
+
+  const getAdministraPendencias = (): string[] => {
+    const missing: string[] = [];
+    if ((formData.novoProprietario || '').trim() && !formData.empreendedorId) {
+      missing.push('Empreendedor (Novo Proprietário)');
+    }
+    const hasBarragemManual = Boolean(
+      (formData.nomeFazenda || '').trim() ||
+      (formData.latGMS || '').trim() ||
+      (formData.longGMS || '').trim()
+    );
+    if (hasBarragemManual && !formData.barragemId) {
+      missing.push('Barragem');
+    }
+    if ((formData.responsavelTecnico || '').trim() && !(formData.responsavelTecnicoId || formData.responsavelTecnicoRegistered)) {
+      missing.push(`Responsável Técnico (${formData.responsavelTecnico.trim()})`);
+    }
+    return missing;
+  };
+
   const handleConcluir = async () => {
+    const pendencias = getAdministraPendencias();
+    if (pendencias.length > 0) {
+      toast.error(
+        `Para concluir a transferência, cadastre ou vincule na base do Administra: ${pendencias.join(', ')}. Você ainda pode salvar como Rascunho.`
+      );
+      return;
+    }
     setIsSaving(true);
     try {
       await saveToSupabase('concluido');
@@ -1064,6 +1253,15 @@ GSALARH/SEMA-MT`;
   };
 
   const handleSave = async (isFinal: boolean = false) => {
+    if (isFinal) {
+      const pendencias = getAdministraPendencias();
+      if (pendencias.length > 0) {
+        toast.error(
+          `Para concluir a transferência, cadastre ou vincule na base do Administra: ${pendencias.join(', ')}. Você ainda pode salvar como Rascunho.`
+        );
+        return;
+      }
+    }
     setIsSaving(true);
     try {
       await saveToSupabase(isFinal ? 'concluido' : 'rascunho');
@@ -1154,7 +1352,59 @@ GSALARH/SEMA-MT`;
               <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${expandedBlocks.pedido ? 'rotate-180' : ''}`} />
             </button>
             {expandedBlocks.pedido && (
-              <div className="p-6">
+              <div className="p-6 space-y-6">
+                 <EcosystemSelector
+                   selectedEmpreendedorId={formData.empreendedorId}
+                   selectedBarragemId={formData.barragemId}
+                   selectedBarragemNome={formData.nomeFazenda}
+                   cpfCnpjFallback={formData.novoDoc}
+                   snisbFallback={formData.snisb}
+                   showRtSelector={true}
+                   readOnly={readOnly}
+                   onSelectEmpreendedor={(emp: EmpreendedorMaster) => {
+                     const digits = (emp.cpf_cnpj || '').replace(/\D/g, '');
+                     setFormData(p => ({
+                       ...p,
+                       empreendedorId: emp.id,
+                       novoProprietario: emp.razao_social || p.novoProprietario,
+                       novoTipoDoc: digits.length === 14 ? 'CNPJ' : digits.length === 11 ? 'CPF' : p.novoTipoDoc,
+                       novoDoc: emp.cpf_cnpj || p.novoDoc,
+                       municipio: emp.municipio || p.municipio,
+                       sistemaOrigem: emp.sistema_origem || p.sistemaOrigem,
+                     }));
+                   }}
+                   onSelectBarragem={(bar: BarragemMaster) => {
+                     const nextMun = bar.municipio || formData.municipio;
+                     const upgs = nextMun ? getUpgsForMunicipality(nextMun) : [];
+                     setFormData(p => ({
+                       ...p,
+                       barragemId: bar.id,
+                       empreendedorId: bar.empreendedor_id || p.empreendedorId,
+                       snisb: bar.snisb || p.snisb,
+                       nomeFazenda: bar.nome || p.nomeFazenda,
+                       municipio: nextMun,
+                       upg: bar.upg || (upgs.length === 1 ? upgs[0] : p.upg),
+                       subBacia: bar.sub_bacia || p.subBacia,
+                       nomeCursoAgua: bar.curso_agua || p.nomeCursoAgua,
+                       zonaEndereco: bar.zona === 'Urbana' ? 'Urbana' : bar.zona ? 'Rural' : p.zonaEndereco,
+                       latGMS: normalizeCoordinateToGMS(bar.lat_gms, bar.lat_decimal) || p.latGMS,
+                       longGMS: normalizeCoordinateToGMS(bar.long_gms, bar.long_decimal) || p.longGMS,
+                       alturaMaxima: bar.altura_maxima || p.alturaMaxima,
+                       volumeArmazenado: bar.volume_nmm || p.volumeArmazenado,
+                       sistemaOrigem: bar.sistema_origem || p.sistemaOrigem,
+                     }));
+                   }}
+                   onSelectRT={(rt: ResponsavelTecnicoSearchItem) => {
+                     const artVinculada = rt.art || rt.arts?.[0]?.art || '';
+                     setFormData(p => ({
+                       ...p,
+                       responsavelTecnico: rt.nome || p.responsavelTecnico,
+                       artNumero: artVinculada || p.artNumero,
+                       responsavelTecnicoId: rt.id,
+                       responsavelTecnicoRegistered: true,
+                     }));
+                   }}
+                 />
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Analista */}
                     <div className="md:col-span-2 space-y-2">
@@ -1409,7 +1659,12 @@ GSALARH/SEMA-MT`;
                           <input 
                              type="text"
                              value={formData.responsavelTecnico}
-                             onChange={(e) => setFormData(p => ({ ...p, responsavelTecnico: e.target.value }))}
+                             onChange={(e) => setFormData(p => ({
+                               ...p,
+                               responsavelTecnico: e.target.value,
+                               responsavelTecnicoId: undefined,
+                               responsavelTecnicoRegistered: false,
+                             }))}
                              placeholder="Nome completo do RT"
                              className="w-full bg-white border border-slate-200 rounded-xl py-3 pl-12 pr-4 text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
                           />
@@ -1433,6 +1688,40 @@ GSALARH/SEMA-MT`;
                           />
                        </div>
                     </div>
+
+                    {!readOnly && (formData.responsavelTecnicoId || formData.responsavelTecnicoRegistered || (formData.responsavelTecnico || '').trim().length >= 2) && (
+                      <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50">
+                        {formData.responsavelTecnicoId || formData.responsavelTecnicoRegistered ? (
+                          <>
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Responsável Técnico cadastrado no Administra
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setFormData(p => ({ ...p, responsavelTecnicoId: undefined, responsavelTecnicoRegistered: false }))}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100"
+                            >
+                              <Unlink className="w-3 h-3" /> Desvincular
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs font-medium text-amber-700">
+                              Responsável Técnico preenchido manualmente ainda não cadastrado no Administra.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleRegisterRT}
+                              disabled={registeringRt}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                            >
+                              {registeringRt ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />}
+                              Cadastrar Responsável Técnico na base de dados
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
 
                     {/* Localização / Nome da Fazenda */}
                     <div className="space-y-2">
@@ -1508,33 +1797,69 @@ GSALARH/SEMA-MT`;
                        </div>
                        
                        <div className="space-y-2">
-                          <label className="text-[9px] font-black text-slate-400 uppercase">Latitude (S)</label>
+                          <label className="text-[9px] font-black text-slate-400 uppercase">Latitude</label>
                           <div className="relative group">
                              <div className="absolute left-4 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-400 group-focus-within:text-emerald-500 transition-colors">LAT</div>
                              <input 
                                 type="text"
                                 value={formData.latGMS}
-                                onChange={(e) => setFormData(p => ({ ...p, latGMS: maskGMS(e.target.value, 'Lat') }))}
-                                placeholder="15°10’41,44¨S"
+                                onChange={(e) => setFormData(p => ({ ...p, latGMS: formatGmsInput(e.target.value, p.latGMS) }))}
+                                onBlur={() => setFormData(p => ({ ...p, latGMS: normalizeCoordinateToGMS(p.latGMS) }))}
+                                placeholder={GMS_PLACEHOLDER}
                                 className="w-full bg-white border border-slate-200 rounded-xl py-3 pl-12 pr-4 text-sm font-mono font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
                              />
                           </div>
                        </div>
 
                        <div className="space-y-2">
-                          <label className="text-[9px] font-black text-slate-400 uppercase">Longitude (O)</label>
+                          <label className="text-[9px] font-black text-slate-400 uppercase">Longitude</label>
                           <div className="relative group">
                              <div className="absolute left-4 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-400 group-focus-within:text-emerald-500 transition-colors">LONG</div>
                              <input 
                                 type="text"
                                 value={formData.longGMS}
-                                onChange={(e) => setFormData(p => ({ ...p, longGMS: maskGMS(e.target.value, 'Long') }))}
-                                placeholder="54°13’56,82¨O"
+                                onChange={(e) => setFormData(p => ({ ...p, longGMS: formatGmsInput(e.target.value, p.longGMS) }))}
+                                onBlur={() => setFormData(p => ({ ...p, longGMS: normalizeCoordinateToGMS(p.longGMS) }))}
+                                placeholder={GMS_PLACEHOLDER}
                                 className="w-full bg-white border border-slate-200 rounded-xl py-3 pl-12 pr-4 text-sm font-mono font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
                              />
                           </div>
                        </div>
                     </div>
+
+                    {!readOnly && (formData.barragemId || (formData.nomeFazenda || '').trim().length >= 2 || (formData.latGMS || '').trim() || (formData.longGMS || '').trim()) && (
+                      <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50">
+                        {formData.barragemId ? (
+                          <>
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Barragem cadastrada/vinculada no Administra
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setFormData(p => ({ ...p, barragemId: undefined }))}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100"
+                            >
+                              <Unlink className="w-3 h-3" /> Desvincular
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs font-medium text-amber-700">
+                              Barragem preenchida manualmente ainda não cadastrada no Administra.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleRegisterBarragem}
+                              disabled={registeringBar}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                            >
+                              {registeringBar ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+                              Cadastrar Barragem na base de dados
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
 
                     {/* Informações sobre a barragem */}
                     <div className="md:col-span-2 mt-8 space-y-6 pt-8 border-t border-slate-100">

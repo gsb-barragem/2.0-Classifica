@@ -14,7 +14,10 @@ import {
   Plus,
   Trash2,
   Download,
-  Loader2
+  Loader2,
+  UserPlus,
+  Unlink,
+  CheckCircle2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -38,10 +41,17 @@ import { logActivity } from '../src/lib/auditService';
 import { supabase } from '../src/supabaseClient';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { DataContext } from '../src/contexts/DataContext';
-import { NoObligatoryData } from '../types';
+import { BarragemMaster, EmpreendedorMaster, NoObligatoryData, SistemaOrigem } from '../types';
 import { OPS_ANALISTA as ANALYST_LIST } from '../constants';
 import ConfirmModal from './ui/ConfirmModal';
-import { syncClassificaProductToAdministra } from '../src/services/administraService';
+import { EcosystemSelector, ResponsavelTecnicoSearchItem } from './EcosystemSelector';
+import {
+  createResponsavelTecnicoInAdministra,
+  saveBarragemMaster,
+  saveEmpreendedorMaster,
+  syncClassificaProductToAdministra,
+} from '../src/services/administraService';
+import { GMS_PLACEHOLDER, formatGmsInput, normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
 
 interface NoObligatoryFormProps {
   onBack: () => void;
@@ -248,6 +258,12 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
   const { currentUser } = useContext(AuthContext);
   const { refreshData } = useContext(DataContext);
   const [isSaving, setIsSaving] = useState(false);
+  const [empreendedorId, setEmpreendedorId] = useState<string | undefined>(initialData?.empreendedorId || initialData?.data?.empreendedorId);
+  const [barragemId, setBarragemId] = useState<string | undefined>(initialData?.barragemId || initialData?.data?.barragemId || initialData?.data?.damInfo?.principal?.barragemId);
+  const [sistemaOrigem, setSistemaOrigem] = useState<SistemaOrigem>(initialData?.sistemaOrigem || initialData?.data?.sistemaOrigem || 'CLASSIFICA_CSB');
+  const [registeringEmp, setRegisteringEmp] = useState(false);
+  const [registeringBarragemKey, setRegisteringBarragemKey] = useState<string | null>(null);
+  const [registeringRtId, setRegisteringRtId] = useState<string | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -306,7 +322,18 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
       processo: '',
       analista: '',
       analistaOther: '',
-      respTecnicos: [] as { id: string, nome: string, art: string, isOther: boolean, nomeOther: string }[],
+      respTecnicos: [] as {
+        id: string;
+        nome: string;
+        art: string;
+        isOther: boolean;
+        nomeOther: string;
+        rtId?: string;
+        registroProfissional?: string;
+        cpf?: string;
+        registeredInAdministra?: boolean;
+        sistemaOrigem?: SistemaOrigem;
+      }[],
       empreendedor: '',
       cpfCnpj: '',
       localizacao: '',
@@ -337,7 +364,9 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
         volume: '',
         vazaoMax: '',
         areaBacia: '',
-        segurancaEstrutural: ''
+        segurancaEstrutural: '',
+        barragemId: undefined as string | undefined,
+        sistemaOrigem: undefined as SistemaOrigem | undefined,
       },
       upstreamDams: [] as {
         id: string;
@@ -352,6 +381,8 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
         vazaoMax: string;
         areaBacia: string;
         segurancaEstrutural: string;
+        barragemId?: string;
+        sistemaOrigem?: SistemaOrigem;
       }[]
     },
     entrepreneurSystem: {
@@ -367,8 +398,33 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
 
   // Load initial data
   useEffect(() => {
-    if (initialData && initialData.data) {
-      setFormData(initialData.data);
+    if (initialData) {
+      setEmpreendedorId(initialData.empreendedorId || initialData.data?.empreendedorId);
+      const loadedPrincipalBarId = initialData.barragemId || initialData.data?.barragemId || initialData.data?.damInfo?.principal?.barragemId;
+      setBarragemId(loadedPrincipalBarId);
+      setSistemaOrigem(initialData.sistemaOrigem || initialData.data?.sistemaOrigem || 'CLASSIFICA_CSB');
+      if (initialData.data) {
+        const loaded = initialData.data;
+        setFormData({
+          ...loaded,
+          damInfo: loaded.damInfo ? {
+            ...loaded.damInfo,
+            principal: {
+              ...loaded.damInfo.principal,
+              barragemId: loaded.damInfo.principal?.barragemId || loadedPrincipalBarId,
+              lat: normalizeCoordinateToGMS(loaded.damInfo.principal?.lat),
+              long: normalizeCoordinateToGMS(loaded.damInfo.principal?.long),
+            },
+            upstreamDams: Array.isArray(loaded.damInfo.upstreamDams)
+              ? loaded.damInfo.upstreamDams.map((d: any) => ({
+                  ...d,
+                  lat: normalizeCoordinateToGMS(d.lat),
+                  long: normalizeCoordinateToGMS(d.long),
+                }))
+              : [],
+          } : loaded.damInfo,
+        });
+      }
     }
   }, [initialData]);
 
@@ -439,6 +495,215 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
     });
   };
 
+  const handleRegisterEmpreendedor = async () => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado para cadastrar na base de dados.');
+      return;
+    }
+    const nome = (formData.orderInfo.empreendedor || '').trim();
+    if (nome.length < 2) {
+      toast.error('Informe a identificação do empreendedor antes de cadastrar.');
+      return;
+    }
+    setRegisteringEmp(true);
+    try {
+      const res = await saveEmpreendedorMaster(
+        {
+          id: empreendedorId || undefined,
+          razao_social: nome,
+          cpf_cnpj: formData.orderInfo.cpfCnpj || undefined,
+          endereco: formData.orderInfo.localizacao || undefined,
+          municipio: formData.orderInfo.municipio || undefined,
+          num_car: formData.orderInfo.numCar || undefined,
+          sistema_origem: sistemaOrigem,
+        },
+        currentUser
+      );
+      if (res.success && res.data) {
+        setEmpreendedorId(res.data.id);
+        setSistemaOrigem(res.data.sistema_origem || sistemaOrigem);
+        setFormData(prev => ({
+          ...prev,
+          orderInfo: {
+            ...prev.orderInfo,
+            empreendedor: res.data!.razao_social || prev.orderInfo.empreendedor,
+            cpfCnpj: res.data!.cpf_cnpj || prev.orderInfo.cpfCnpj,
+            localizacao: res.data!.endereco || prev.orderInfo.localizacao,
+            municipio: res.data!.municipio || prev.orderInfo.municipio,
+            numCar: res.data!.num_car || prev.orderInfo.numCar,
+          },
+        }));
+        toast.success('Empreendedor cadastrado/vinculado na base do Administra.');
+      } else {
+        toast.error(res.message || 'Não foi possível cadastrar o empreendedor no Administra.');
+      }
+    } finally {
+      setRegisteringEmp(false);
+    }
+  };
+
+  const handleRegisterRT = async (rtLocalId: string) => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado para cadastrar na base de dados.');
+      return;
+    }
+    const rt = formData.orderInfo.respTecnicos.find(item => item.id === rtLocalId);
+    if (!rt) return;
+    const nomeFinal = (rt.isOther ? rt.nomeOther : rt.nome || '').trim();
+    if (nomeFinal.length < 2) {
+      toast.error('Informe o nome completo do Responsável Técnico antes de cadastrar.');
+      return;
+    }
+    setRegisteringRtId(rtLocalId);
+    try {
+      const res = await createResponsavelTecnicoInAdministra(
+        {
+          nome: nomeFinal,
+          cpf: rt.cpf || undefined,
+          registro_profissional: rt.registroProfissional || undefined,
+          art: rt.art?.trim() || undefined,
+          barragemId: formData.damInfo.principal.barragemId || barragemId || null,
+        },
+        currentUser
+      );
+      if (res.success && res.data?.rt) {
+        setFormData(prev => ({
+          ...prev,
+          orderInfo: {
+            ...prev.orderInfo,
+            respTecnicos: prev.orderInfo.respTecnicos.map(item =>
+              item.id === rtLocalId
+                ? {
+                    ...item,
+                    rtId: res.data!.rt.id,
+                    registroProfissional: res.data!.rt.registro_profissional || item.registroProfissional,
+                    cpf: res.data!.rt.cpf || item.cpf,
+                    registeredInAdministra: true,
+                    sistemaOrigem: res.data!.rt.sistema_origem || 'CLASSIFICA_CSB',
+                  }
+                : item
+            ),
+          },
+        }));
+        toast.success(`Responsável Técnico "${nomeFinal}" cadastrado na base do Administra.`);
+        if (res.data.artSaveWarning) {
+          toast.warning(res.data.artSaveWarning);
+        }
+      } else {
+        toast.error(res.message || 'Não foi possível cadastrar o Responsável Técnico no Administra.');
+      }
+    } finally {
+      setRegisteringRtId(null);
+    }
+  };
+
+  const handleRegisterDam = async (dam: any, index: number | null) => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado para cadastrar na base de dados.');
+      return;
+    }
+    const isPrincipal = index === null;
+    const key = isPrincipal ? 'principal' : dam.id || `upstream-${index}`;
+    const nome = (dam.nome || '').trim() || (isPrincipal ? (formData.orderInfo.empreendedor || '').trim() : '');
+    if (nome.length < 2 && !(dam.lat || '').trim() && !(dam.long || '').trim()) {
+      toast.error('Informe o nome da barragem ou coordenadas antes de cadastrar.');
+      return;
+    }
+    setRegisteringBarragemKey(key);
+    try {
+      const res = await saveBarragemMaster(
+        {
+          id: dam.barragemId || (isPrincipal ? barragemId : undefined),
+          nome: nome.length >= 2 ? nome : 'Barragem sem identificação',
+          empreendedor_id: empreendedorId || undefined,
+          municipio: formData.orderInfo.municipio || undefined,
+          localizacao: formData.orderInfo.localizacao || undefined,
+          curso_agua: formData.orderInfo.cursoAgua || undefined,
+          sub_bacia: formData.orderInfo.subBacia || undefined,
+          finalidade: formData.orderInfo.finalidade === 'Outro'
+            ? formData.orderInfo.finalidadeOther || undefined
+            : formData.orderInfo.finalidade || undefined,
+          situacao: formData.orderInfo.situacao === 'Outro'
+            ? formData.orderInfo.situacaoOther || undefined
+            : formData.orderInfo.situacao || undefined,
+          lat_gms: normalizeCoordinateToGMS(dam.lat) || undefined,
+          long_gms: normalizeCoordinateToGMS(dam.long) || undefined,
+          altura_maxima: dam.altura || undefined,
+          volume_nmm: dam.volume || undefined,
+          dpa_atual: 'Baixo',
+          enquadramento_pnsb: formData.entrepreneurSystem.enquadraPNSB,
+          sistema_origem: dam.sistemaOrigem || sistemaOrigem,
+        },
+        currentUser
+      );
+      if (res.success && res.data) {
+        const savedBar = res.data;
+        if (isPrincipal) {
+          setBarragemId(savedBar.id);
+          setFormData(prev => ({
+            ...prev,
+            damInfo: {
+              ...prev.damInfo,
+              principal: {
+                ...prev.damInfo.principal,
+                barragemId: savedBar.id,
+                nome: savedBar.nome || prev.damInfo.principal.nome,
+                lat: normalizeCoordinateToGMS(savedBar.lat_gms, savedBar.lat_decimal) || prev.damInfo.principal.lat,
+                long: normalizeCoordinateToGMS(savedBar.long_gms, savedBar.long_decimal) || prev.damInfo.principal.long,
+                sistemaOrigem: savedBar.sistema_origem || prev.damInfo.principal.sistemaOrigem,
+              },
+            },
+          }));
+        } else {
+          setFormData(prev => {
+            const next = [...prev.damInfo.upstreamDams];
+            if (next[index as number]) {
+              next[index as number] = {
+                ...next[index as number],
+                barragemId: savedBar.id,
+                nome: savedBar.nome || next[index as number].nome,
+                lat: normalizeCoordinateToGMS(savedBar.lat_gms, savedBar.lat_decimal) || next[index as number].lat,
+                long: normalizeCoordinateToGMS(savedBar.long_gms, savedBar.long_decimal) || next[index as number].long,
+                sistemaOrigem: savedBar.sistema_origem || next[index as number].sistemaOrigem,
+              };
+            }
+            return { ...prev, damInfo: { ...prev.damInfo, upstreamDams: next } };
+          });
+        }
+        toast.success('Barragem cadastrada/vinculada na base do Administra.');
+      } else {
+        toast.error(res.message || 'Não foi possível cadastrar a barragem no Administra.');
+      }
+    } finally {
+      setRegisteringBarragemKey(null);
+    }
+  };
+
+  const getAdministraPendencias = (): string[] => {
+    const missing: string[] = [];
+    if ((formData.orderInfo.empreendedor || '').trim() && !empreendedorId) {
+      missing.push('Empreendedor');
+    }
+    const p = formData.damInfo.principal;
+    const hasPrincipal = Boolean((p.nome || '').trim() || (p.lat || '').trim() || (p.long || '').trim());
+    if (hasPrincipal && !(p.barragemId || barragemId)) {
+      missing.push('Barragem Principal');
+    }
+    formData.damInfo.upstreamDams.forEach((dam, idx) => {
+      const hasUp = Boolean((dam.nome || '').trim() || (dam.lat || '').trim() || (dam.long || '').trim());
+      if (hasUp && !dam.barragemId) {
+        missing.push(`Barragem a Montante #${idx + 1}`);
+      }
+    });
+    formData.orderInfo.respTecnicos.forEach((rt, idx) => {
+      const rtName = (rt.isOther ? rt.nomeOther : rt.nome || '').trim();
+      if (rtName && !(rt.rtId || rt.registeredInAdministra)) {
+        missing.push(`Responsável Técnico (${rtName || `#${idx + 1}`})`);
+      }
+    });
+    return missing;
+  };
+
   const handleSave = async (isConcluido: boolean = false) => {
     if (!currentUser) {
       toast.error("Usuário não autenticado");
@@ -450,18 +715,52 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
       return;
     }
 
+    if (isConcluido) {
+      const pendencias = getAdministraPendencias();
+      if (pendencias.length > 0) {
+        toast.error(
+          `Para concluir o parecer, cadastre ou vincule na base do Administra: ${pendencias.join(', ')}. Você ainda pode salvar como Rascunho.`
+        );
+        return;
+      }
+    }
+
     setIsSaving(true);
     const newStatus = isConcluido ? 'Concluído' : 'Rascunho';
     
     try {
+      const principalBarragemId = formData.damInfo.principal.barragemId || barragemId || null;
+      const normalizedPrincipalLat = normalizeCoordinateToGMS(formData.damInfo.principal.lat);
+      const normalizedPrincipalLong = normalizeCoordinateToGMS(formData.damInfo.principal.long);
+      const normalizedFormData = {
+        ...formData,
+        empreendedorId: empreendedorId || null,
+        barragemId: principalBarragemId,
+        sistemaOrigem,
+        damInfo: {
+          ...formData.damInfo,
+          principal: {
+            ...formData.damInfo.principal,
+            barragemId: principalBarragemId || undefined,
+            lat: normalizedPrincipalLat,
+            long: normalizedPrincipalLong,
+          },
+          upstreamDams: formData.damInfo.upstreamDams.map((d) => ({
+            ...d,
+            lat: normalizeCoordinateToGMS(d.lat),
+            long: normalizeCoordinateToGMS(d.long),
+          })),
+        },
+      };
+
       const basePayload = {
-        data: formData,
+        data: normalizedFormData,
         analista: analystName,
         processo: formData.orderInfo.processo,
         status: newStatus,
         municipio: formData.orderInfo.municipio,
-        lat: formData.damInfo.principal.lat,
-        long: formData.damInfo.principal.long,
+        lat: normalizedPrincipalLat,
+        long: normalizedPrincipalLong,
         empreendedor: formData.orderInfo.empreendedor,
         user_id: currentUser.id,
         updated_at: new Date().toISOString()
@@ -469,9 +768,9 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
 
       const fullPayload = {
         ...basePayload,
-        empreendedor_id: initialData?.empreendedorId || null,
-        barragem_id: initialData?.barragemId || null,
-        sistema_origem: initialData?.sistemaOrigem || 'CLASSIFICA_CSB',
+        empreendedor_id: empreendedorId || null,
+        barragem_id: principalBarragemId,
+        sistema_origem: sistemaOrigem || 'CLASSIFICA_CSB',
       };
 
       let result;
@@ -512,10 +811,10 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
             numero_documento: formData.orderInfo.processo || null,
             status: newStatus,
             analista_nome: analystName,
-            empreendedor_id: initialData?.empreendedorId || null,
+            empreendedor_id: empreendedorId || null,
             empreendedor_nome: formData.orderInfo.empreendedor || null,
             empreendedor_cpf_cnpj: formData.orderInfo.cpfCnpj || null,
-            barragem_id: initialData?.barragemId || null,
+            barragem_id: principalBarragemId,
             barragem_nome: formData.damInfo.principal.nome || null,
             barragem_snisb: (formData.damInfo.principal as any).snisb || null,
             municipio: formData.orderInfo.municipio || null,
@@ -837,7 +1136,7 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
             </tr>
             <tr className="border-b border-slate-200">
               <td className="p-2 font-bold bg-slate-50 border-r border-slate-200">Coordenadas do eixo do barramento:</td>
-              <td className="p-2">Lat: {dam.lat} / Long: {dam.long}</td>
+              <td className="p-2">Lat: {normalizeCoordinateToGMS(dam.lat)} / Long: {normalizeCoordinateToGMS(dam.long)}</td>
             </tr>
             <tr className="border-b border-slate-200">
               <td className="p-2 font-bold bg-slate-50 border-r border-slate-200">Dano Potencial Associado (DPA)*:</td>
@@ -884,27 +1183,6 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
           damInfo: { ...formData.damInfo, upstreamDams: newList }
         });
       }
-    };
-
-    const formatGMS = (val: string, type: 'lat' | 'long') => {
-      let digits = val.replace(/\D/g, '');
-      if (digits.length > 8) digits = digits.slice(0, 8);
-      let formatted = '';
-      if (digits.length > 0) {
-        formatted += digits.slice(0, 2) + '°';
-        if (digits.length > 2) {
-          formatted += digits.slice(2, 4) + '’';
-          if (digits.length > 4) {
-            formatted += digits.slice(4, 6);
-            if (digits.length > 6) {
-              formatted += ',' + digits.slice(6, 8);
-            }
-            formatted += '¨';
-          }
-        }
-      }
-      if (formatted) formatted += type === 'lat' ? 'S' : 'O';
-      return formatted;
     };
 
     return (
@@ -954,9 +1232,10 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
             <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Lat (Sirgas 2000 GMS)</label>
             <input 
               type="text" 
-              placeholder="Ex: 15°10’41,12¨S"
+              placeholder={GMS_PLACEHOLDER}
               value={dam.lat}
-              onChange={(e) => updateField('lat', formatGMS(e.target.value, 'lat') || e.target.value)}
+              onChange={(e) => updateField('lat', formatGmsInput(e.target.value, dam.lat))}
+              onBlur={() => updateField('lat', normalizeCoordinateToGMS(dam.lat))}
               className="w-full px-5 py-3.5 bg-white border border-slate-300 rounded-2xl focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 outline-none font-bold text-slate-800 transition-all placeholder:text-slate-300" 
             />
           </div>
@@ -964,9 +1243,10 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
             <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Long (Sirgas 2000 GMS)</label>
             <input 
               type="text" 
-              placeholder="Ex: 54°13’56,12¨O"
+              placeholder={GMS_PLACEHOLDER}
               value={dam.long}
-              onChange={(e) => updateField('long', formatGMS(e.target.value, 'long') || e.target.value)}
+              onChange={(e) => updateField('long', formatGmsInput(e.target.value, dam.long))}
+              onBlur={() => updateField('long', normalizeCoordinateToGMS(dam.long))}
               className="w-full px-5 py-3.5 bg-white border border-slate-300 rounded-2xl focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 outline-none font-bold text-slate-800 transition-all placeholder:text-slate-300" 
             />
           </div>
@@ -1058,6 +1338,60 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
               placeholder="Inserção manual..."
             />
           </div>
+          {!readOnly && (() => {
+            const damKey = isPrincipal ? 'principal' : dam.id || `upstream-${index}`;
+            const linkedDamId = dam.barragemId || (isPrincipal ? barragemId : undefined);
+            const hasManualDam = Boolean((dam.nome || '').trim() || (dam.lat || '').trim() || (dam.long || '').trim());
+            if (!linkedDamId && !hasManualDam) return null;
+            return (
+              <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-2xl border border-slate-200 bg-white">
+                {linkedDamId ? (
+                  <>
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                      <CheckCircle2 size={14} /> Barragem cadastrada/vinculada no Administra
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isPrincipal) {
+                          setBarragemId(undefined);
+                          setFormData(prev => ({
+                            ...prev,
+                            damInfo: {
+                              ...prev.damInfo,
+                              principal: { ...prev.damInfo.principal, barragemId: undefined },
+                            },
+                          }));
+                        } else {
+                          const next = [...formData.damInfo.upstreamDams];
+                          next[index as number] = { ...next[index as number], barragemId: undefined };
+                          setFormData(prev => ({ ...prev, damInfo: { ...prev.damInfo, upstreamDams: next } }));
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-600 bg-slate-50 border border-slate-200 hover:bg-slate-100"
+                    >
+                      <Unlink size={12} /> Desvincular
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xs font-medium text-amber-700">
+                      Barragem preenchida manualmente ainda não cadastrada no Administra.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleRegisterDam(dam, index)}
+                      disabled={registeringBarragemKey === damKey}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                    >
+                      {registeringBarragemKey === damKey ? <Loader2 size={13} className="animate-spin" /> : <Database size={13} />}
+                      Cadastrar Barragem na base de dados
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
@@ -1775,6 +2109,100 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
 
   const orderInfoContent = (
     <div className="space-y-10 text-slate-800">
+      <EcosystemSelector
+        selectedEmpreendedorId={empreendedorId}
+        selectedBarragemId={barragemId || formData.damInfo.principal.barragemId}
+        selectedBarragemNome={formData.damInfo.principal.nome}
+        cpfCnpjFallback={formData.orderInfo.cpfCnpj}
+        showRtSelector={true}
+        readOnly={readOnly}
+        onSelectEmpreendedor={(emp: EmpreendedorMaster) => {
+          setEmpreendedorId(emp.id);
+          setSistemaOrigem(emp.sistema_origem || sistemaOrigem);
+          setFormData(prev => ({
+            ...prev,
+            orderInfo: {
+              ...prev.orderInfo,
+              empreendedor: emp.razao_social || prev.orderInfo.empreendedor,
+              cpfCnpj: emp.cpf_cnpj || prev.orderInfo.cpfCnpj,
+              localizacao: emp.endereco || prev.orderInfo.localizacao,
+              municipio: emp.municipio || prev.orderInfo.municipio,
+              numCar: emp.num_car || prev.orderInfo.numCar,
+            },
+          }));
+        }}
+        onSelectBarragem={(bar: BarragemMaster) => {
+          setBarragemId(bar.id);
+          if (bar.empreendedor_id && !empreendedorId) {
+            setEmpreendedorId(bar.empreendedor_id);
+          }
+          setFormData(prev => ({
+            ...prev,
+            orderInfo: {
+              ...prev.orderInfo,
+              municipio: bar.municipio || prev.orderInfo.municipio,
+              localizacao: bar.localizacao || prev.orderInfo.localizacao,
+              cursoAgua: bar.curso_agua || prev.orderInfo.cursoAgua,
+              subBacia: bar.sub_bacia || prev.orderInfo.subBacia,
+            },
+            damInfo: {
+              ...prev.damInfo,
+              principal: {
+                ...prev.damInfo.principal,
+                barragemId: bar.id,
+                nome: bar.nome || prev.damInfo.principal.nome,
+                lat: normalizeCoordinateToGMS(bar.lat_gms, bar.lat_decimal) || prev.damInfo.principal.lat,
+                long: normalizeCoordinateToGMS(bar.long_gms, bar.long_decimal) || prev.damInfo.principal.long,
+                altura: bar.altura_maxima || prev.damInfo.principal.altura,
+                volume: bar.volume_nmm || prev.damInfo.principal.volume,
+                sistemaOrigem: bar.sistema_origem || prev.damInfo.principal.sistemaOrigem,
+              },
+            },
+          }));
+        }}
+        onSelectRT={(rt: ResponsavelTecnicoSearchItem) => {
+          const matchedName = RT_LIST.find(
+            opt => opt.trim().toLowerCase() === (rt.nome || '').trim().toLowerCase()
+          );
+          const artVinculada = rt.art || rt.arts?.[0]?.art || '';
+          setFormData(prev => {
+            const existingIndex = prev.orderInfo.respTecnicos.findIndex(
+              item =>
+                item.rtId === rt.id ||
+                (item.isOther ? item.nomeOther : item.nome).trim().toLowerCase() ===
+                  (rt.nome || '').trim().toLowerCase()
+            );
+            const nextEntry = {
+              id: existingIndex >= 0 ? prev.orderInfo.respTecnicos[existingIndex].id : Math.random().toString(36).substr(2, 9),
+              nome: matchedName || '',
+              art: artVinculada,
+              isOther: !matchedName,
+              nomeOther: matchedName ? '' : rt.nome,
+              rtId: rt.id,
+              registroProfissional: rt.registro_profissional || undefined,
+              cpf: rt.cpf || undefined,
+              registeredInAdministra: true,
+              sistemaOrigem: rt.sistema_origem,
+            };
+            if (existingIndex >= 0) {
+              const updated = [...prev.orderInfo.respTecnicos];
+              updated[existingIndex] = {
+                ...updated[existingIndex],
+                ...nextEntry,
+                art: artVinculada || updated[existingIndex].art,
+              };
+              return { ...prev, orderInfo: { ...prev.orderInfo, respTecnicos: updated } };
+            }
+            return {
+              ...prev,
+              orderInfo: {
+                ...prev.orderInfo,
+                respTecnicos: [...prev.orderInfo.respTecnicos, nextEntry],
+              },
+            };
+          });
+        }}
+      />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         <div className="space-y-2">
           <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Número do Processo</label>
@@ -1858,6 +2286,8 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
                     value={rt.isOther ? 'OUTRO' : rt.nome}
                     onChange={(e) => {
                       const newList = [...formData.orderInfo.respTecnicos];
+                      newList[index].rtId = undefined;
+                      newList[index].registeredInAdministra = false;
                       if (e.target.value === 'OUTRO') {
                         newList[index].isOther = true;
                         newList[index].nome = '';
@@ -1883,6 +2313,8 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
                       onChange={(e) => {
                         const newList = [...formData.orderInfo.respTecnicos];
                         newList[index].nomeOther = e.target.value;
+                        newList[index].rtId = undefined;
+                        newList[index].registeredInAdministra = false;
                         setFormData({...formData, orderInfo: {...formData.orderInfo, respTecnicos: newList}});
                       }}
                       className="mt-2 w-full px-4 py-2 bg-white border border-emerald-200 rounded-xl text-xs font-bold outline-none animate-in slide-in-from-top-1"
@@ -1905,6 +2337,43 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
                   />
                 </div>
               </div>
+              {!readOnly && (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/70">
+                  {rt.rtId || rt.registeredInAdministra ? (
+                    <>
+                      <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                        <CheckCircle2 size={14} /> Responsável Técnico cadastrado no Administra
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newList = [...formData.orderInfo.respTecnicos];
+                          newList[index] = { ...newList[index], rtId: undefined, registeredInAdministra: false };
+                          setFormData({ ...formData, orderInfo: { ...formData.orderInfo, respTecnicos: newList } });
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100"
+                      >
+                        <Unlink size={12} /> Desvincular
+                      </button>
+                    </>
+                  ) : (rt.isOther ? rt.nomeOther : rt.nome || '').trim().length >= 2 ? (
+                    <>
+                      <span className="text-xs font-medium text-amber-700">
+                        RT ainda não cadastrado na base do Administra.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRegisterRT(rt.id)}
+                        disabled={registeringRtId === rt.id}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                      >
+                        {registeringRtId === rt.id ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
+                        Cadastrar Responsável Técnico na base de dados
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1949,6 +2418,40 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
               className="w-full px-5 py-3.5 bg-white border border-slate-300 rounded-2xl focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 outline-none font-bold text-slate-800 transition-all placeholder:text-slate-300" 
             />
           </div>
+
+          {!readOnly && (empreendedorId || (formData.orderInfo.empreendedor || '').trim().length >= 2) && (
+            <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-2xl border border-slate-200 bg-slate-50">
+              {empreendedorId ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                    <CheckCircle2 size={14} /> Empreendedor cadastrado/vinculado no Administra
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEmpreendedorId(undefined)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100"
+                  >
+                    <Unlink size={12} /> Desvincular
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="text-xs font-medium text-amber-700">
+                    Empreendedor preenchido manualmente ainda não cadastrado no Administra.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleRegisterEmpreendedor}
+                    disabled={registeringEmp}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                  >
+                    {registeringEmp ? <Loader2 size={13} className="animate-spin" /> : <Database size={13} />}
+                    Cadastrar Empreendedor na base de dados
+                  </button>
+                </>
+              )}
+            </div>
+          )}
 
           <div className="space-y-2 md:col-span-2">
             <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Localização do Empreendimento</label>

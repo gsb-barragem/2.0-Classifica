@@ -185,8 +185,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onNewParecer, onNewOficio, onNewI
       // Barramento Principal
       { header: 'Barragem Nome', getter: (d: any) => d.barragemPrincipal?.nome || '' },
       { header: 'SNISB', getter: (d: any) => d.barragemPrincipal?.snisb || '' },
-      { header: 'Latitude (GMS)', getter: (d: any) => formatToGMS(d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.lat : d.lat) },
-      { header: 'Longitude (GMS)', getter: (d: any) => formatToGMS(d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.long : d.long) },
+      { header: 'Latitude (GMS)', getter: (d: any) => formatToGMS(d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.lat : (d.lat || d.latGMS)) },
+      { header: 'Longitude (GMS)', getter: (d: any) => formatToGMS(d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.long : (d.long || d.longGMS)) },
       { header: 'Latitude (Decimal)', getter: (d: any) => d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.lat : d.lat },
       { header: 'Longitude (Decimal)', getter: (d: any) => d.tipo_documento === 'Parecer Técnico' ? d.barragemPrincipal?.long : d.long },
       { header: 'Altura Máxima (m)', getter: (d: any) => d.barragemPrincipal?.alturaMaxima || '' },
@@ -236,8 +236,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onNewParecer, onNewOficio, onNewI
       'Analista': n.analista,
       'Empreendedor': n.empreendedor,
       'Município': n.municipio,
-      'Latitude': n.lat,
-      'Longitude': n.long,
+      'Latitude': formatToGMS(n.lat),
+      'Longitude': formatToGMS(n.long),
       'Data Criação': n.created_at ? new Date(n.created_at).toLocaleDateString('pt-BR') : ''
     }));
 

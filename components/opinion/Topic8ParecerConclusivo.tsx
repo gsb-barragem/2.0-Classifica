@@ -58,7 +58,7 @@ export const Topic8ParecerConclusivo: React.FC<Topic8ParecerConclusivoProps> = (
         >
           <div className="flex items-center gap-2 text-left">
             <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-sm shrink-0">
-              {derived.isPreClassificacao ? 6 : 7}
+              {derived.isPreClassificacao || derived.pnsb.status === 'nao_enquadrada' ? 6 : 7}
             </div>
             <div>
               <h2 className="text-lg font-bold text-slate-800 group-hover:text-emerald-600 transition-colors">
