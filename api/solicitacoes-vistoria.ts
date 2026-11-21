@@ -293,8 +293,9 @@ export function sanitizeSolicitacao(raw: unknown): SolicitacaoVistoriaSafe | nul
   const id = typeof r.id === 'string' || typeof r.id === 'number' ? String(r.id).trim() : '';
   if (!id) return null;
 
-  const sistemaOrigem = String(r.sistema_origem ?? '').trim().toLowerCase();
-  if (sistemaOrigem && sistemaOrigem !== 'classifica') {
+  const sistemaOrigem =
+    typeof r.sistema_origem === 'string' ? r.sistema_origem.trim().toLowerCase() : '';
+  if (sistemaOrigem !== 'classifica') {
     return null;
   }
 
@@ -547,6 +548,25 @@ function parseRoutePath(req: NodeReq): {
   };
 }
 
+function fixedCentralErrorMessage(statusCode: number): string {
+  if (statusCode === 400 || statusCode === 422) {
+    return 'Dados inválidos rejeitados pelo serviço central de solicitações.';
+  }
+  if (statusCode === 401 || statusCode === 403) {
+    return 'Serviço central de solicitações recusou a autenticação do servidor.';
+  }
+  if (statusCode === 404) {
+    return 'Solicitação de vistoria não encontrada no serviço central.';
+  }
+  if (statusCode === 409) {
+    return 'Conflito de estado no serviço central de solicitações.';
+  }
+  if (statusCode >= 400 && statusCode < 500) {
+    return 'Requisição recusada pelo serviço central de solicitações.';
+  }
+  return 'Serviço central de solicitações indisponível no momento.';
+}
+
 async function callCentralApi(
   fetchImpl: typeof fetch,
   url: string,
@@ -569,23 +589,17 @@ async function callCentralApi(
       },
     });
 
-    const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     if (!res.ok) {
-      const rawErr =
-        (typeof json?.error === 'string' && json.error) ||
-        (typeof json?.message === 'string' && json.message) ||
-        `Erro no serviço central de solicitações (HTTP ${res.status}).`;
-      const safeErr = containsCpfOrCnpj(rawErr)
-        ? `Erro no serviço central de solicitações (HTTP ${res.status}).`
-        : rawErr;
+      await res.body?.cancel?.().catch(() => undefined);
       return {
         ok: false,
         status: res.status === 409 ? 409 : res.status >= 400 && res.status < 500 ? res.status : 502,
-        data: json,
-        errorMessage: safeErr,
+        data: null,
+        errorMessage: fixedCentralErrorMessage(res.status),
       };
     }
 
+    const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     return { ok: true, status: res.status, data: json };
   } catch {
     return {
@@ -1019,7 +1033,7 @@ export function createSolicitacoesVistoriaHandler(
         return;
       }
 
-      // Envia SOMENTE observacao_campo e ator verificado — nunca status nem data_realizacao
+      // Envia SOMENTE observacao_campo — nunca status, data_realizacao nem campos extras
       const upstream = await callCentralApi(
         fetchImpl,
         `${config.baseUrl}/${encodeURIComponent(targetId)}/observacao`,
@@ -1028,8 +1042,6 @@ export function createSolicitacoesVistoriaHandler(
           method: 'PATCH',
           body: JSON.stringify({
             observacao_campo: obsCheck.value,
-            atualizado_por_id: actor.canonicalUserId,
-            atualizado_por_email: actor.email || null,
           }),
         }
       );

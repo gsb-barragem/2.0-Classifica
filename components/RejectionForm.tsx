@@ -530,7 +530,7 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
     }
     const rt = formData.responsaveisTecnicos.find(item => item.id === rtLocalId);
     if (!rt) return;
-    const nomeFinal = (rt.nome === 'OUTRO' ? rt.nomeOutro : rt.nome || '').trim();
+    const nomeFinal = ((rt.nome === 'OUTRO' ? rt.nomeOutro : rt.nome) || '').trim();
     if (nomeFinal.length < 2) {
       toast.error('Informe o nome completo do Responsável Técnico antes de cadastrar.');
       return;
@@ -590,7 +590,7 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
       missing.push('Barragem');
     }
     formData.responsaveisTecnicos.forEach((rt, idx) => {
-      const rtName = (rt.nome === 'OUTRO' ? rt.nomeOutro : rt.nome || '').trim();
+      const rtName = ((rt.nome === 'OUTRO' ? rt.nomeOutro : rt.nome) || '').trim();
       if (rtName && !(rt.rtId || rt.registeredInAdministra)) {
         missing.push(`Responsável Técnico (${rtName || `#${idx + 1}`})`);
       }
@@ -1470,7 +1470,7 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
                                 <Unlink size={12} /> Desvincular
                               </button>
                             </>
-                          ) : (rt.nome === 'OUTRO' ? rt.nomeOutro : rt.nome || '').trim().length >= 2 ? (
+                          ) : ((rt.nome === 'OUTRO' ? rt.nomeOutro : rt.nome) || '').trim().length >= 2 ? (
                             <>
                               <span className="text-xs font-medium text-amber-700">
                                 RT ainda não cadastrado na base do Administra.
@@ -1616,7 +1616,7 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
                         const existingIndex = prev.responsaveisTecnicos.findIndex(
                           item =>
                             item.rtId === rt.id ||
-                            (item.nome === 'OUTRO' ? item.nomeOutro : item.nome).trim().toLowerCase() ===
+                            ((item.nome === 'OUTRO' ? item.nomeOutro : item.nome) || '').trim().toLowerCase() ===
                               (rt.nome || '').trim().toLowerCase()
                         );
                         if (existingIndex >= 0) {

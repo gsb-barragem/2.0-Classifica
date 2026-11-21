@@ -59,7 +59,7 @@ export const Topic2PedidoEmpreendedor: React.FC<Topic2PedidoEmpreendedorProps> =
       const empRes = await saveEmpreendedorMaster(
         {
           id: formData.empreendedorId,
-          cpf_cnpj: digits || null,
+          cpf_cnpj: digits || undefined,
           razao_social: formData.razaoSocial,
           endereco: formData.localizacao,
           municipio: formData.municipio,
@@ -105,7 +105,7 @@ export const Topic2PedidoEmpreendedor: React.FC<Topic2PedidoEmpreendedorProps> =
         const empRes = await saveEmpreendedorMaster(
           {
             id: formData.empreendedorId,
-            cpf_cnpj: digits || null,
+            cpf_cnpj: digits || undefined,
             razao_social: formData.razaoSocial,
             endereco: formData.localizacao,
             municipio: formData.municipio,
