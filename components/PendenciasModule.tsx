@@ -21,6 +21,7 @@ import { toast } from 'sonner';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { AppDocument, DataContext } from '../src/contexts/DataContext';
 import {
+  PendenciaCapabilities,
   PendenciaHistoricoRecord,
   PendenciaRecord,
   PendenciaSituacao,
@@ -29,12 +30,12 @@ import {
 import {
   alterarSituacaoPendencia,
   createPendencia,
+  CURRENT_PENDENCIA_ORIGEM,
   direcionarPendencia,
   editarPendencia,
-  listAssignableUsersForAdmin,
   listPendenciaHistorico,
   listPendencias,
-  matchesActorUserId,
+  matchesActorCanonicalId,
   PENDENCIA_SITUACAO_LABELS,
   PENDENCIA_SITUACOES,
   VerifiedSessionActor,
@@ -104,7 +105,15 @@ export const PendenciasModule: React.FC = () => {
 
   const [verifiedActor, setVerifiedActor] = useState<VerifiedSessionActor | null>(null);
   const [pendencias, setPendencias] = useState<PendenciaRecord[]>([]);
+  const [serverUserNames, setServerUserNames] = useState<Record<string, string>>({});
+  const [historicoUserNames, setHistoricoUserNames] = useState<Record<string, string>>({});
   const [assignableUsers, setAssignableUsers] = useState<PendenciaUsuarioOption[]>([]);
+  const [capabilities, setCapabilities] = useState<PendenciaCapabilities>({
+    readEnabled: true,
+    mutationsEnabled: false,
+    mutationBlockCode: null,
+    mutationBlockReason: null,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -164,16 +173,16 @@ export const PendenciasModule: React.FC = () => {
     if (verifiedActor) return verifiedActor;
     if (!currentUser) return null;
     return {
-      authUserId: currentUser.authUserId,
-      profileId: currentUser.id,
+      canonicalUserId: currentUser.authUserId,
       name: currentUser.name,
-      email: currentUser.email || '',
       role: currentUser.role,
     };
   }, [verifiedActor, currentUser]);
 
   const isAdmin = effectiveActor?.role === 'Administrador';
-  const canWrite = effectiveActor ? effectiveActor.role !== 'Visualizador' : false;
+  const canWrite = Boolean(
+    effectiveActor && effectiveActor.role !== 'Visualizador' && capabilities.mutationsEnabled
+  );
 
   // Ensure non-admins cannot stay on the Admin-only tab
   useEffect(() => {
@@ -186,20 +195,12 @@ export const PendenciasModule: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const { actor, items } = await listPendencias();
-      setVerifiedActor(actor);
-      setPendencias(items);
-
-      if (actor.role === 'Administrador') {
-        try {
-          const users = await listAssignableUsersForAdmin();
-          setAssignableUsers(users);
-        } catch {
-          setAssignableUsers([]);
-        }
-      } else {
-        setAssignableUsers([]);
-      }
+      const response = await listPendencias();
+      setVerifiedActor(response.actor);
+      setPendencias(response.items);
+      setServerUserNames(response.userNames);
+      setAssignableUsers(response.assignableUsers);
+      setCapabilities(response.capabilities);
     } catch (err: any) {
       setError(err?.message || 'Não foi possível carregar as pendências.');
     } finally {
@@ -215,16 +216,20 @@ export const PendenciasModule: React.FC = () => {
 
   const usersLookupMap = useMemo(() => {
     const map = new Map<string, string>();
+    Object.entries(serverUserNames).forEach(([id, name]) => {
+      if (id && name) map.set(id, name);
+    });
+    Object.entries(historicoUserNames).forEach(([id, name]) => {
+      if (id && name) map.set(id, name);
+    });
     if (effectiveActor) {
-      map.set(effectiveActor.authUserId, effectiveActor.name);
-      map.set(effectiveActor.profileId, effectiveActor.name);
+      map.set(effectiveActor.canonicalUserId, effectiveActor.name);
     }
     assignableUsers.forEach((u) => {
-      map.set(u.id, u.name);
-      map.set(u.authUserId, u.name);
+      map.set(u.canonicalUserId, u.name);
     });
     return map;
-  }, [effectiveActor, assignableUsers]);
+  }, [serverUserNames, historicoUserNames, effectiveActor, assignableUsers]);
 
   const resolveUserName = useCallback(
     (userId?: string | null): string => {
@@ -245,8 +250,9 @@ export const PendenciasModule: React.FC = () => {
     setHistoricoLoading(true);
     setHistoricoError(null);
     try {
-      const rows = await listPendenciaHistorico(pendenciaId);
-      setHistorico(rows);
+      const res = await listPendenciaHistorico(pendenciaId);
+      setHistorico(res.items);
+      setHistoricoUserNames((prev) => ({ ...prev, ...res.userNames }));
     } catch (err: any) {
       setHistoricoError(err?.message || 'Não foi possível carregar o histórico.');
       setHistorico([]);
@@ -281,11 +287,14 @@ export const PendenciasModule: React.FC = () => {
   };
 
   const refreshAfterMutation = async (updatedId?: string) => {
-    const { actor, items } = await listPendencias();
-    setVerifiedActor(actor);
-    setPendencias(items);
+    const response = await listPendencias();
+    setVerifiedActor(response.actor);
+    setPendencias(response.items);
+    setServerUserNames(response.userNames);
+    setAssignableUsers(response.assignableUsers);
+    setCapabilities(response.capabilities);
     if (updatedId) {
-      const refreshed = items.find((p) => p.id === updatedId) || null;
+      const refreshed = response.items.find((p) => p.id === updatedId) || null;
       if (refreshed) {
         setSelectedPendencia(refreshed);
         setDirecionarTargetId(refreshed.responsavel_id || '');
@@ -296,7 +305,7 @@ export const PendenciasModule: React.FC = () => {
   };
 
   const tabCounts = useMemo(() => {
-    const minhas = pendencias.filter((p) => matchesActorUserId(p.responsavel_id, effectiveActor)).length;
+    const minhas = pendencias.filter((p) => matchesActorCanonicalId(p.responsavel_id, effectiveActor)).length;
     const geral = pendencias.length;
     const direcionado = pendencias.filter((p) => Boolean(p.responsavel_id)).length;
     return { minhas, geral, direcionado };
@@ -305,7 +314,7 @@ export const PendenciasModule: React.FC = () => {
   const filteredPendencias = useMemo(() => {
     const base = pendencias.filter((p) => {
       if (activeTab === 'minhas') {
-        return matchesActorUserId(p.responsavel_id, effectiveActor);
+        return matchesActorCanonicalId(p.responsavel_id, effectiveActor);
       }
       if (activeTab === 'direcionado') {
         return isAdmin && Boolean(p.responsavel_id);
@@ -343,7 +352,7 @@ export const PendenciasModule: React.FC = () => {
       if (item.situacao === 'resolvida' || item.situacao === 'cancelada') return false;
       if (isAdmin) return true;
       if (!item.responsavel_id) return true;
-      return matchesActorUserId(item.responsavel_id, effectiveActor);
+      return matchesActorCanonicalId(item.responsavel_id, effectiveActor);
     },
     [canWrite, effectiveActor, isAdmin]
   );
@@ -354,8 +363,8 @@ export const PendenciasModule: React.FC = () => {
       if (isAdmin) return true;
       return (
         !item.responsavel_id ||
-        matchesActorUserId(item.responsavel_id, effectiveActor) ||
-        matchesActorUserId(item.criado_por, effectiveActor)
+        matchesActorCanonicalId(item.responsavel_id, effectiveActor) ||
+        matchesActorCanonicalId(item.criado_por, effectiveActor)
       );
     },
     [canWrite, effectiveActor, isAdmin]
@@ -621,6 +630,23 @@ export const PendenciasModule: React.FC = () => {
         )}
       </div>
 
+      {/* Mutation Lock Notice when server blocks non-atomic writes */}
+      {!loading && !error && !capabilities.mutationsEnabled && effectiveActor?.role !== 'Visualizador' && (
+        <div
+          role="status"
+          className="mb-5 p-4 bg-amber-50 border border-amber-200 text-amber-900 text-sm rounded-2xl flex items-start gap-3"
+        >
+          <AlertCircle size={18} className="shrink-0 mt-0.5 text-amber-700" />
+          <div>
+            <p className="font-bold">Gravação de pendências bloqueada no servidor</p>
+            <p className="text-xs text-amber-800 mt-0.5">
+              {capabilities.mutationBlockReason ||
+                'Operações de criação, edição, direcionamento e alteração de situação estão suspensas até haver garantia transacional conjunta com o histórico.'}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Main Card */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         {/* Search & Filter Bar */}
@@ -838,7 +864,7 @@ export const PendenciasModule: React.FC = () => {
               <div>
                 <h3 className="text-xl font-bold text-slate-800">Nova Pendência</h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Origem: <span className="font-mono font-bold">CLASSIFICA_CSB</span> — registrada com histórico automático.
+                  Origem: <span className="font-mono font-bold">{CURRENT_PENDENCIA_ORIGEM}</span> — registrada com histórico automático.
                 </p>
               </div>
               <button
@@ -985,31 +1011,31 @@ export const PendenciasModule: React.FC = () => {
                     <input
                       className={`${inputClass} font-mono text-xs`}
                       maxLength={120}
-                      placeholder="UUID do registro"
+                      placeholder="Identificador do registro"
                       value={createForm.referencia_id}
                       onChange={(e) => setCreateForm({ ...createForm, referencia_id: e.target.value })}
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">
-                      ID do Empreendedor (UUID)
+                      ID do Empreendedor
                     </label>
                     <input
                       className={`${inputClass} font-mono text-xs`}
                       maxLength={120}
-                      placeholder="UUID do empreendedor"
+                      placeholder="Identificador do empreendedor"
                       value={createForm.empreendedor_id}
                       onChange={(e) => setCreateForm({ ...createForm, empreendedor_id: e.target.value })}
                     />
                   </div>
                   <div className="md:col-span-2">
                     <label className="block text-xs font-medium text-slate-600 mb-1">
-                      ID da Barragem (UUID)
+                      ID da Barragem
                     </label>
                     <input
                       className={`${inputClass} font-mono text-xs`}
                       maxLength={120}
-                      placeholder="UUID da barragem"
+                      placeholder="Identificador da barragem"
                       value={createForm.barragem_id}
                       onChange={(e) => setCreateForm({ ...createForm, barragem_id: e.target.value })}
                     />
@@ -1030,7 +1056,7 @@ export const PendenciasModule: React.FC = () => {
                   >
                     <option value="">Sem responsável (situação: Aberta)</option>
                     {activeAssignableUsers.map((u) => (
-                      <option key={u.id} value={u.authUserId}>
+                      <option key={u.canonicalUserId} value={u.canonicalUserId}>
                         {u.name} ({u.role})
                       </option>
                     ))}
@@ -1252,7 +1278,7 @@ export const PendenciasModule: React.FC = () => {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1">
-                        ID do Empreendedor (UUID)
+                        ID do Empreendedor
                       </label>
                       <input
                         className={`${inputClass} font-mono text-xs`}
@@ -1263,7 +1289,7 @@ export const PendenciasModule: React.FC = () => {
                     </div>
                     <div className="md:col-span-2">
                       <label className="block text-xs font-medium text-slate-600 mb-1">
-                        ID da Barragem (UUID)
+                        ID da Barragem
                       </label>
                       <input
                         className={`${inputClass} font-mono text-xs`}
@@ -1375,7 +1401,7 @@ export const PendenciasModule: React.FC = () => {
                   {(canResolveItem(selectedPendencia) ||
                     isAdmin ||
                     !selectedPendencia.responsavel_id ||
-                    matchesActorUserId(selectedPendencia.responsavel_id, effectiveActor)) && (
+                    matchesActorCanonicalId(selectedPendencia.responsavel_id, effectiveActor)) && (
                     <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-3">
                       <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
                         <CheckCircle2 size={15} className="text-emerald-600" />
@@ -1447,7 +1473,7 @@ export const PendenciasModule: React.FC = () => {
                       >
                         <option value="">Selecione um usuário ativo...</option>
                         {activeAssignableUsers.map((u) => (
-                          <option key={u.id} value={u.authUserId}>
+                          <option key={u.canonicalUserId} value={u.canonicalUserId}>
                             {u.name} ({u.role})
                           </option>
                         ))}

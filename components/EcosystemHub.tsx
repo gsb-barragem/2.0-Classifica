@@ -4,6 +4,7 @@ import {
   Building2,
   ChevronLeft,
   ChevronRight,
+  ClipboardCheck,
   Database,
   Eye,
   FileText,
@@ -19,10 +20,12 @@ import {
   UserCheck,
   X,
 } from 'lucide-react';
-import { ParecerData, ProdutoEcossistemaResumo, SistemaOrigem, TransferData } from '../types';
+import { ParecerData, ProdutoEcossistemaResumo, SistemaOrigem, SolicitacaoVistoriaPrefill, TransferData } from '../types';
+import { AuthContext } from '../src/contexts/AuthContext';
 import { AppDocument, DataContext } from '../src/contexts/DataContext';
 import { getEcosystemStatus } from '../src/lib/ecosystemClients';
 import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
+import { SolicitarVistoriaModal } from './SolicitarVistoriaModal';
 import {
   AdministraCanonicalTable,
   AdministraReadError,
@@ -366,6 +369,9 @@ export const EcosystemHub: React.FC = () => {
   const [barragens, setBarragens] = useState<BarragemWithRelations[]>([]);
   const [rts, setRts] = useState<RtWithRelations[]>([]);
   const [vinculos, setVinculos] = useState<VinculoRtBarragemWithRelations[]>([]);
+
+  const { currentUser } = useContext(AuthContext);
+  const [vistoriaPrefill, setVistoriaPrefill] = useState<SolicitacaoVistoriaPrefill | null>(null);
 
   const [detailModal, setDetailModal] = useState<{
     open: boolean;
@@ -1405,12 +1411,51 @@ export const EcosystemHub: React.FC = () => {
                 <h3 className="text-lg font-black text-slate-900">{detailModal.title}</h3>
                 {detailModal.subtitle && <p className="text-xs text-slate-500 font-mono mt-0.5">{detailModal.subtitle}</p>}
               </div>
-              <button
-                onClick={() => setDetailModal((prev) => ({ ...prev, open: false }))}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-2">
+                {detailModal.isDam && currentUser?.role !== 'Visualizador' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const bar = detailModal.primaryRecord!;
+                      const coords = getBarragemCoordinatesGMS(bar);
+                      const coordStr = [coords.lat, coords.long].filter(Boolean).join(' / ') || null;
+                      const empRel = detailModal.relations.find((r) => /empreendedor/i.test(r.label))?.records?.[0];
+                      const empId =
+                        pickField(bar, [/^empreendedor_id$/i, /^id_empreendedor$/i]) ||
+                        (empRel ? pickField(empRel, [/^id$/i, /^empreendedor_id$/i, /^id_empreendedor$/i]) : null);
+                      const empName =
+                        (empRel ? getEmpreendedorLabel(empRel) : null) ||
+                        pickField(bar, [/^empreendedor_nome$/i, /^razao_social$/i, /^empreendedor$/i]);
+
+                      setVistoriaPrefill({
+                        barragem_id: pickField(bar, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]),
+                        barragem_nome: getBarragemLabel(bar),
+                        municipio: pickField(bar, [/^municipio$/i, /^cidade$/i]),
+                        curso_agua: pickField(bar, [/^curso_agua$/i, /^curso_d_agua$/i, /^rio$/i, /^hidrografia$/i]),
+                        coordenadas: coordStr,
+                        empreendedor_id: empId,
+                        empreendedor_nome: empName,
+                        processo:
+                          pickField(bar, [/^processo$/i, /^protocolo$/i, /^numero_processo$/i]) ||
+                          detailModal.damProducts?.find((prod) => prod.numero_documento)?.numero_documento ||
+                          null,
+                        classificacao_atual: detailModal.damClassification?.categoria || null,
+                        dpa: detailModal.damClassification?.dpa || null,
+                        cri: detailModal.damClassification?.cri || null,
+                      });
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-colors shadow-sm"
+                  >
+                    <ClipboardCheck size={14} /> Solicitar vistoria
+                  </button>
+                )}
+                <button
+                  onClick={() => setDetailModal((prev) => ({ ...prev, open: false }))}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
             {detailModal.isDam && (
@@ -1575,6 +1620,12 @@ export const EcosystemHub: React.FC = () => {
           </div>
         </div>
       )}
+
+      <SolicitarVistoriaModal
+        isOpen={Boolean(vistoriaPrefill)}
+        onClose={() => setVistoriaPrefill(null)}
+        prefill={vistoriaPrefill}
+      />
     </div>
   );
 };

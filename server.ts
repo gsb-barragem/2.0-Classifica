@@ -8,6 +8,8 @@ import dotenv from 'dotenv';
 import { parseArgs } from 'node:util';
 import administraLeituraHandler from './api/administra-leitura.ts';
 import administraEscritaHandler from './api/administra-escrita.ts';
+import pendenciasHandler from './api/pendencias.ts';
+import solicitacoesVistoriaHandler from './api/solicitacoes-vistoria.ts';
 
 dotenv.config();
 
@@ -62,6 +64,26 @@ async function startServer() {
 
   app.all('/api/administra-escrita', (req, res) => {
     void administraEscritaHandler(req, res);
+  });
+
+  app.all('/api/pendencias', (req, res) => {
+    void pendenciasHandler(req, res);
+  });
+
+  app.all('/api/solicitacoes-vistoria', (req, res) => {
+    void solicitacoesVistoriaHandler(req, res);
+  });
+
+  app.all('/api/solicitacoes-vistoria/:id', (req, res) => {
+    void solicitacoesVistoriaHandler(req, res);
+  });
+
+  app.all('/api/solicitacoes-vistoria/:id/observacao', (req, res) => {
+    void solicitacoesVistoriaHandler(req, res);
+  });
+
+  app.all('/api/solicitacoes-vistoria/:id/cancelar', (req, res) => {
+    void solicitacoesVistoriaHandler(req, res);
   });
 
   if (isProduction) {

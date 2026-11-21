@@ -1,16 +1,18 @@
 
 import React, { useState, useMemo, useRef, useEffect, useContext } from 'react';
-import { Search, ChevronDown, ChevronUp, Check, Eye, Edit, Trash2, Database, Filter, ArrowUpDown, ArrowUp, ArrowDown, Loader2, ChevronLeft, ChevronRight, X, Plus, FileText, Download, FileWarning } from 'lucide-react';
+import { Search, ChevronDown, ChevronUp, Check, Eye, Edit, Trash2, Database, Filter, ArrowUpDown, ArrowUp, ArrowDown, Loader2, ChevronLeft, ChevronRight, X, Plus, FileText, Download, FileWarning, ClipboardCheck } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { toast } from 'sonner';
 import ConfirmModal from './ui/ConfirmModal';
 import MultiSelect from './ui/MultiSelect';
 import { formatToGMS } from './MTMap';
 import { OPS_MUNICIPIOS, OPS_ANALISTA, OPS_RESPONSAVEL_TECNICO } from '../constants';
-import { RiscoEnum, DanoEnum, ParecerData, OficioData, NoObligatoryData } from '../types';
+import { RiscoEnum, DanoEnum, ParecerData, OficioData, NoObligatoryData, SolicitacaoVistoriaPrefill } from '../types';
 import { DataContext, AppDocument } from '../src/contexts/DataContext';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { logActivity } from '../src/lib/auditService';
+import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
+import { SolicitarVistoriaModal } from './SolicitarVistoriaModal';
 
 // --- MultiSelect Component (Reused) ---
 // Removed local MultiSelect, using imported one
@@ -47,6 +49,7 @@ const ParecerList: React.FC<ParecerListProps> = ({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [vistoriaPrefill, setVistoriaPrefill] = useState<SolicitacaoVistoriaPrefill | null>(null);
   
   // Confirm Modal State
   const [confirmModal, setConfirmModal] = useState<{
@@ -728,6 +731,34 @@ const ParecerList: React.FC<ParecerListProps> = ({
                                                     </button>
                                                 )}
                                                 
+                                                {isParecer && p && currentUser?.role !== 'Visualizador' && (
+                                                    <button
+                                                        className="p-1.5 bg-white border border-slate-200 text-slate-400 hover:text-amber-600 hover:border-amber-300 rounded-lg transition-all shadow-sm"
+                                                        title="Solicitar vistoria"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            const latGms = normalizeCoordinateToGMS(p.barragemPrincipal?.lat);
+                                                            const longGms = normalizeCoordinateToGMS(p.barragemPrincipal?.long);
+                                                            const coords = [latGms, longGms].filter(Boolean).join(' / ') || p.coordenadas || null;
+                                                            setVistoriaPrefill({
+                                                                barragem_id: p.barragemId || p.barragemPrincipal?.barragemId || null,
+                                                                barragem_nome: p.barragemPrincipal?.nome || null,
+                                                                municipio: p.municipio || null,
+                                                                curso_agua: p.cursoAgua || null,
+                                                                coordenadas: coords,
+                                                                empreendedor_id: p.empreendedorId || null,
+                                                                empreendedor_nome: p.razaoSocial || p.interessado || null,
+                                                                processo: p.protocolo || p.sistemaInformacoes?.processo || null,
+                                                                classificacao_atual: p.classificacao?.resumo || null,
+                                                                dpa: p.classificacao?.dpaClass || null,
+                                                                cri: p.classificacao?.risco || null,
+                                                            });
+                                                        }}
+                                                    >
+                                                        <ClipboardCheck size={12} />
+                                                    </button>
+                                                )}
+
                                                 {(currentUser?.role === 'Administrador' || item.userId === currentUser?.id) && (
                                                     <button 
                                                         className="p-1.5 bg-white border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-300 rounded-lg transition-all shadow-sm" 
@@ -937,6 +968,11 @@ const ParecerList: React.FC<ParecerListProps> = ({
         onConfirm={confirmModal.onConfirm}
         onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
         variant={confirmModal.variant}
+      />
+      <SolicitarVistoriaModal
+        isOpen={Boolean(vistoriaPrefill)}
+        onClose={() => setVistoriaPrefill(null)}
+        prefill={vistoriaPrefill}
       />
     </div>
   );

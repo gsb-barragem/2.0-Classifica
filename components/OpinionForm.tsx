@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowLeft,
   CheckCircle,
+  ClipboardCheck,
   Droplets,
   Eraser,
   Eye,
@@ -50,6 +51,7 @@ import {
   EstruturaHidraulica,
   ParecerData,
   RiscoEnum,
+  SolicitacaoVistoriaPrefill,
 } from '../types';
 import { OpinionPreviewSection } from './opinion/OpinionPreviewSection';
 import { Topic1Introducao } from './opinion/Topic1Introducao';
@@ -60,6 +62,7 @@ import { Topic5Cri } from './opinion/Topic5Cri';
 import { Topic6ResultadoMatriz } from './opinion/Topic6ResultadoMatriz';
 import { Topic8ParecerConclusivo } from './opinion/Topic8ParecerConclusivo';
 import ConfirmModal from './ui/ConfirmModal';
+import { SolicitarVistoriaModal } from './SolicitarVistoriaModal';
 
 interface OpinionFormProps {
   onBack: () => void;
@@ -420,6 +423,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
   });
 
   const [isSaving, setIsSaving] = useState(false);
+  const [solicitarVistoriaOpen, setSolicitarVistoriaOpen] = useState(false);
   const [activeSection, setActiveSection] = useState('introducao');
   const [isManualParecerEdited, setIsManualParecerEdited] = useState(() =>
     Boolean(initialData?.parecer_final && initialData.parecer_final.trim().length > 0)
@@ -446,6 +450,45 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
 
   const hideCriSection =
     derived.isPreClassificacao || derived.pnsb.status === 'nao_enquadrada';
+
+  const solicitacaoPrefill = useMemo<SolicitacaoVistoriaPrefill>(() => {
+    const latGms = normalizeCoordinateToGMS(formData.barragemPrincipal?.lat);
+    const longGms = normalizeCoordinateToGMS(formData.barragemPrincipal?.long);
+    const coords =
+      [latGms, longGms].filter(Boolean).join(' / ') || formData.coordenadas || null;
+
+    return {
+      barragem_id: formData.barragemId || formData.barragemPrincipal?.barragemId || null,
+      barragem_nome: formData.barragemPrincipal?.nome || null,
+      municipio: formData.municipio || null,
+      curso_agua: formData.cursoAgua || null,
+      coordenadas: coords,
+      empreendedor_id: formData.empreendedorId || null,
+      empreendedor_nome: formData.razaoSocial || formData.interessado || null,
+      processo: formData.protocolo || formData.sistemaInformacoes?.processo || null,
+      classificacao_atual: derived.resultado.label || null,
+      dpa: derived.dpa.dpaClass || null,
+      cri: hideCriSection ? null : derived.cri?.risco || null,
+    };
+  }, [
+    formData.barragemId,
+    formData.barragemPrincipal?.barragemId,
+    formData.barragemPrincipal?.nome,
+    formData.barragemPrincipal?.lat,
+    formData.barragemPrincipal?.long,
+    formData.municipio,
+    formData.cursoAgua,
+    formData.coordenadas,
+    formData.empreendedorId,
+    formData.razaoSocial,
+    formData.interessado,
+    formData.protocolo,
+    formData.sistemaInformacoes?.processo,
+    derived.resultado.label,
+    derived.dpa.dpaClass,
+    derived.cri?.risco,
+    hideCriSection,
+  ]);
 
   const sections = useMemo(() => {
     if (derived.isPreClassificacao) {
@@ -1633,6 +1676,18 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
             </>
           )}
 
+          {currentUser && currentUser.role !== 'Visualizador' && (
+            <button
+              type="button"
+              onClick={() => setSolicitarVistoriaOpen(true)}
+              disabled={isSaving}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 font-medium shadow-sm text-sm disabled:opacity-60"
+              title="Solicitar vistoria técnica para esta barragem"
+            >
+              <ClipboardCheck size={18} /> Solicitar vistoria
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleGenerateDoc}
@@ -1907,6 +1962,12 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         onConfirm={confirmModal.onConfirm}
         onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
         variant={confirmModal.variant}
+      />
+
+      <SolicitarVistoriaModal
+        isOpen={solicitarVistoriaOpen}
+        onClose={() => setSolicitarVistoriaOpen(false)}
+        prefill={solicitacaoPrefill}
       />
     </div>
   );

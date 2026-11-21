@@ -684,12 +684,18 @@ export interface PendenciaHistoricoRecord {
 
 export interface PendenciaUsuarioOption {
   id: string;
-  authUserId: string;
+  canonicalUserId: string;
   name: string;
-  email: string;
   role: UserRole;
   setor?: string | null;
   active: boolean;
+}
+
+export interface PendenciaCapabilities {
+  readEnabled: boolean;
+  mutationsEnabled: boolean;
+  mutationBlockCode: string | null;
+  mutationBlockReason: string | null;
 }
 
 export interface CreatePendenciaInput {
@@ -716,3 +722,73 @@ export interface UpdatePendenciaInput {
   barragem_id?: string | null;
   motivo?: string | null;
 }
+
+// ============================================================================
+// MÓDULO DE SOLICITAÇÕES DE VISTORIA
+// ============================================================================
+
+export type SolicitacaoVistoriaStatus =
+  | 'pendente'
+  | 'aberta'
+  | 'em_planejamento'
+  | 'realizada'
+  | 'cancelada';
+
+export interface SolicitacaoVistoriaEquipeMembro {
+  id?: string | null;
+  nome?: string | null;
+  email?: string | null;
+}
+
+export interface SolicitacaoVistoriaRecord {
+  id: string;
+  sistema_origem: 'classifica';
+  status: SolicitacaoVistoriaStatus | string;
+  relato: string;
+  barragem_id: string | null;
+  barragem_nome: string | null;
+  municipio: string | null;
+  curso_agua: string | null;
+  coordenadas: string | null;
+  empreendedor_id: string | null;
+  empreendedor_nome: string | null;
+  processo: string | null;
+  classificacao_atual: string | null;
+  dpa: string | null;
+  cri: string | null;
+  solicitante_id: string | null;
+  solicitante_nome: string | null;
+  solicitante_email: string | null;
+  vistoria_id: string | null;
+  data_realizacao: string | null;
+  equipe: Array<SolicitacaoVistoriaEquipeMembro | string>;
+  observacao_campo: string | null;
+  motivo_cancelamento: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface SolicitacaoVistoriaPrefill {
+  barragem_id?: string | null;
+  barragem_nome?: string | null;
+  municipio?: string | null;
+  curso_agua?: string | null;
+  coordenadas?: string | null;
+  empreendedor_id?: string | null;
+  empreendedor_nome?: string | null;
+  processo?: string | null;
+  classificacao_atual?: string | null;
+  dpa?: string | null;
+  cri?: string | null;
+}
+
+export interface CreateSolicitacaoVistoriaInput extends SolicitacaoVistoriaPrefill {
+  relato: string;
+}
+
+export interface UpdateSolicitacaoVistoriaInput {
+  relato?: string;
+  acao?: 'editar' | 'cancelar';
+  motivo_cancelamento?: string | null;
+}
+
