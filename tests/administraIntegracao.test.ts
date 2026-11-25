@@ -1241,6 +1241,11 @@ test('EcosystemHub aba Barragens renderiza DTO v2 mascarado sem bloqueio pelo av
   );
   assert.equal(maskedHtml.includes('Barragem UI Piloto'), true);
   assert.equal(maskedHtml.includes('SNISB-123'), true);
+  assert.equal(
+    maskedHtml.includes('15°36&#x27;00,00&quot; S / 56°05&#x27;24,00&quot; O'),
+    true
+  );
+  assert.equal(maskedHtml.includes('-15.6 / -56.09'), false);
   assert.equal(maskedHtml.includes('Busca textual indisponível na fonte v2 de Barragens'), true);
   assert.equal(maskedHtml.includes('disabled=""'), true);
   assert.equal(maskedHtml.includes('Página 1'), true);
@@ -1544,4 +1549,170 @@ test('mapCanonicalBarragem preserva integralmente comportamento legado quando en
   assert.equal(legacyMapped.enquadramento_pnsb, true);
   assert.equal(legacyMapped.sistema_origem, 'CLASSIFICA_CSB');
 });
+
+test('EcosystemHub tabela Barragens v2 formata coordenadas válidas em GMS com direção (S/O, N/E) e exibe — para inválidas, ausentes, mascaradas ou fora de faixa', async () => {
+  const React = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { EcosystemHub, formatBarragemV2CoordinateGms } = await import('../components/EcosystemHub');
+  const { AuthContext } = await import('../src/contexts/AuthContext');
+  const { DataContext } = await import('../src/contexts/DataContext');
+
+  // 1. Coordenadas negativas válidas -> S para latitude, O para longitude
+  assert.equal(formatBarragemV2CoordinateGms(-15.6, 'lat'), '15°36\'00,00" S');
+  assert.equal(formatBarragemV2CoordinateGms(-56.09, 'long'), '56°05\'24,00" O');
+  assert.equal(formatBarragemV2CoordinateGms(-15.601, 'lat'), '15°36\'03,60" S');
+  assert.equal(formatBarragemV2CoordinateGms('-56,097', 'long'), '56°05\'49,20" O');
+  assert.equal(formatBarragemV2CoordinateGms(-0.5, 'lat'), '00°30\'00,00" S');
+  assert.equal(formatBarragemV2CoordinateGms('-0,5', 'long'), '00°30\'00,00" O');
+  assert.equal(formatBarragemV2CoordinateGms('-00°30\'00,00"', 'lat'), '00°30\'00,00" S');
+  assert.equal(formatBarragemV2CoordinateGms('15°36\'03,60" S', 'lat'), '15°36\'03,60" S');
+  assert.equal(formatBarragemV2CoordinateGms('56°05\'49,20" W', 'long'), '56°05\'49,20" O');
+  assert.equal(formatBarragemV2CoordinateGms(-90, 'lat'), '90°00\'00,00" S');
+  assert.equal(formatBarragemV2CoordinateGms(-180, 'long'), '180°00\'00,00" O');
+
+  // 2. Coordenadas positivas válidas -> N para latitude, E para longitude
+  assert.equal(formatBarragemV2CoordinateGms(2.5, 'lat'), '02°30\'00,00" N');
+  assert.equal(formatBarragemV2CoordinateGms(45.5, 'long'), '45°30\'00,00" E');
+  assert.equal(formatBarragemV2CoordinateGms('+12.25', 'lat'), '12°15\'00,00" N');
+  assert.equal(formatBarragemV2CoordinateGms('2°30\'00,00" N', 'lat'), '02°30\'00,00" N');
+  assert.equal(formatBarragemV2CoordinateGms('45°30\'00,00" E', 'long'), '45°30\'00,00" E');
+  assert.equal(formatBarragemV2CoordinateGms(90, 'lat'), '90°00\'00,00" N');
+  assert.equal(formatBarragemV2CoordinateGms(180, 'long'), '180°00\'00,00" E');
+
+  // 3. Valores ausentes -> —
+  for (const missing of [null, undefined, '', '   ']) {
+    assert.equal(formatBarragemV2CoordinateGms(missing, 'lat'), '—');
+    assert.equal(formatBarragemV2CoordinateGms(missing, 'long'), '—');
+  }
+
+  // 4. Valores mascarados, parciais ou inválidos -> — (sem extrair dígitos parciais)
+  const invalidOrMasked: Array<number | string> = [
+    '***',
+    '-15.60**',
+    '15°36\'**',
+    '15°36\'',
+    '15°',
+    'mascarado',
+    '[REDACTED]',
+    'N/A',
+    '--',
+    '5103403',
+    '15°75\'00,00"',
+    '15°30\'65,00"',
+    '-15.60 N',
+    '+56.09 O',
+    NaN,
+    Infinity,
+    -Infinity,
+  ];
+  for (const bad of invalidOrMasked) {
+    assert.equal(formatBarragemV2CoordinateGms(bad, 'lat'), '—');
+    assert.equal(formatBarragemV2CoordinateGms(bad, 'long'), '—');
+  }
+  assert.equal(formatBarragemV2CoordinateGms('15°36\'03,60" O', 'lat'), '—');
+  assert.equal(formatBarragemV2CoordinateGms('15°36\'03,60" S', 'long'), '—');
+
+  // 5. Valores fora de faixa (latitude ±90°, longitude ±180°) -> —
+  for (const badLat of [90.0001, -90.0001, '90.000001', '-90.000001', 91, -95, '90°00\'00,01" N', '95°00\'00,00" S']) {
+    assert.equal(formatBarragemV2CoordinateGms(badLat, 'lat'), '—');
+  }
+  for (const badLong of [180.0001, -180.0001, '180.000001', '-180.000001', 181, -185, '180°00\'00,01" E', '181°00\'00,00" O']) {
+    assert.equal(formatBarragemV2CoordinateGms(badLong, 'long'), '—');
+  }
+
+  // 6. Renderização SSR da tabela Barragens v2 no EcosystemHub
+  const baseDto = {
+    car: null,
+    uf: 'MT',
+    municipio: 'Cuiabá',
+    municipio_ibge: '5103403',
+    empreendimento: null,
+    processo: null,
+    snisb: null,
+    curso_agua: null,
+    altura: null,
+    volume: null,
+    dano_potencial: null,
+    categoria_risco: null,
+    classificada_em: null,
+    situacao: null,
+    empreendedor_id: null,
+  };
+
+  const html = renderToStaticMarkup(
+    React.createElement(
+      AuthContext.Provider,
+      {
+        value: {
+          currentUser: {
+            id: 'admin-1',
+            authUserId: 'auth-admin-1',
+            username: 'admin.teste',
+            name: 'Admin Teste',
+            email: 'admin@classifica.test',
+            role: 'Administrador',
+            active: true,
+            forcePasswordChange: false,
+          },
+          login: async () => ({ success: false }),
+          logout: async () => {},
+          loading: false,
+          refreshProfile: async () => {},
+        },
+      },
+      React.createElement(
+        DataContext.Provider,
+        {
+          value: {
+            pareceres: [],
+            oficios: [],
+            noObligatoriedades: [],
+            indeferimentos: [],
+            transferencias: [],
+            documents: [],
+            loading: false,
+            refreshData: async () => {},
+            deleteParecer: async () => ({ success: false }),
+            deleteOficio: async () => ({ success: false }),
+            deleteNoObligatoriedade: async () => ({ success: false }),
+            deleteIndeferimento: async () => ({ success: false }),
+            deleteTransferencia: async () => ({ success: false }),
+          },
+        },
+        React.createElement(EcosystemHub, {
+          initialTab: 'barragens',
+          initialLegacyDiagnosticsState: { skipInitialDiagnostics: true },
+          initialBarragensV2State: {
+            maskingPolicy: 'masked',
+            limit: 25,
+            cursorHistory: [null],
+            cursorPageIndex: 0,
+            pagination: { limit: 25, nextCursor: null, hasMore: false, total: 5 },
+            skipInitialFetch: true,
+            items: [
+              { ...baseDto, id: 'coord-neg', nome: 'Barragem Sul Oeste', latitude: -15.601, longitude: -56.097 },
+              { ...baseDto, id: 'coord-pos', nome: 'Barragem Norte Leste', latitude: 2.5, longitude: 45.5 },
+              { ...baseDto, id: 'coord-miss', nome: 'Barragem Sem Coord', latitude: null, longitude: null },
+              { ...baseDto, id: 'coord-mask', nome: 'Barragem Mascarada Coord', latitude: '-15.60**', longitude: '56°05\'**' },
+              { ...baseDto, id: 'coord-oob', nome: 'Barragem Fora Faixa', latitude: -91.5, longitude: 181.2 },
+            ],
+          },
+        })
+      )
+    )
+  );
+
+  const decodedHtml = html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"');
+  assert.equal(decodedHtml.includes('15°36\'03,60" S / 56°05\'49,20" O'), true);
+  assert.equal(decodedHtml.includes('02°30\'00,00" N / 45°30\'00,00" E'), true);
+  assert.equal(decodedHtml.includes('-15.601'), false);
+  assert.equal(decodedHtml.includes('-56.097'), false);
+  assert.equal(decodedHtml.includes('-15.60**'), false);
+  assert.equal(decodedHtml.includes('56°05\'**'), false);
+  assert.equal(decodedHtml.includes('-91.5'), false);
+  assert.equal(decodedHtml.includes('181.2'), false);
+  const emDashCoordMatches = decodedHtml.match(/Lat\/Long:<\/span>\s*— \/ —/g) || [];
+  assert.equal(emDashCoordMatches.length, 3);
+});
+
 

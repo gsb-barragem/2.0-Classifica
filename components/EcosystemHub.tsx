@@ -24,7 +24,7 @@ import { ParecerData, ProdutoEcossistemaResumo, SistemaOrigem, SolicitacaoVistor
 import { AuthContext } from '../src/contexts/AuthContext';
 import { AppDocument, DataContext } from '../src/contexts/DataContext';
 import { getEcosystemStatus } from '../src/lib/ecosystemClients';
-import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
+import { normalizeCoordinateToGMS, parseGMSToDecimal } from '../src/utils/coordinateUtils';
 import { SolicitarVistoriaModal } from './SolicitarVistoriaModal';
 import {
   AdministraCanonicalTable,
@@ -196,6 +196,99 @@ function getBarragemCoordinatesGMS(bar: AdministraRecord | null | undefined): {
     lat: normalizeCoordinateToGMS(rawLat, rawLatDec),
     long: normalizeCoordinateToGMS(rawLong, rawLongDec),
   };
+}
+
+export function formatBarragemV2CoordinateGms(
+  value: number | string | null | undefined,
+  axis: 'lat' | 'long'
+): string {
+  const maxAbs = axis === 'lat' ? 90 : 180;
+  const negDir = axis === 'lat' ? 'S' : 'O';
+  const posDir = axis === 'lat' ? 'N' : 'E';
+
+  if (value === null || value === undefined) {
+    return '—';
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || Math.abs(value) > maxAbs) {
+      return '—';
+    }
+    const gms = normalizeCoordinateToGMS(value);
+    if (!gms) return '—';
+    if (value < 0) return `${gms} ${negDir}`;
+    if (value > 0) return `${gms} ${posDir}`;
+    return gms;
+  }
+
+  if (typeof value !== 'string') {
+    return '—';
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '—';
+  }
+
+  const hemiMatch = trimmed.match(/([NSOWE])\s*$/i);
+  const rawHemi = hemiMatch ? hemiMatch[1].toUpperCase() : null;
+  if (rawHemi) {
+    if (axis === 'lat' && rawHemi !== 'N' && rawHemi !== 'S') {
+      return '—';
+    }
+    if (axis === 'long' && rawHemi !== 'E' && rawHemi !== 'O' && rawHemi !== 'W') {
+      return '—';
+    }
+  }
+  const normalizedHemi = rawHemi === 'W' ? 'O' : rawHemi;
+  const hasMinus = trimmed.startsWith('-');
+  const hasPlus = trimmed.startsWith('+');
+
+  if (normalizedHemi) {
+    const isNegHemi = normalizedHemi === 'S' || normalizedHemi === 'O';
+    const isPosHemi = normalizedHemi === 'N' || normalizedHemi === 'E';
+    if ((hasMinus && isPosHemi) || (hasPlus && isNegHemi)) {
+      return '—';
+    }
+  }
+
+  const gms = normalizeCoordinateToGMS(trimmed);
+  if (!gms) {
+    return '—';
+  }
+
+  const isGmsString = trimmed.includes('°') || trimmed.includes('º');
+  if (!isGmsString) {
+    const numericPart = Number(trimmed.replace(/[NSOWE\s]/gi, '').replace(',', '.'));
+    if (!Number.isFinite(numericPart) || Math.abs(numericPart) > maxAbs) {
+      return '—';
+    }
+    if (normalizedHemi) {
+      return `${gms} ${normalizedHemi}`;
+    }
+    if (numericPart < 0) return `${gms} ${negDir}`;
+    if (numericPart > 0) return `${gms} ${posDir}`;
+    return gms;
+  }
+
+  const magnitude = parseGMSToDecimal(gms, false);
+  if (!Number.isFinite(magnitude) || magnitude > maxAbs) {
+    return '—';
+  }
+
+  if (normalizedHemi) {
+    return `${gms} ${normalizedHemi}`;
+  }
+  if (magnitude === 0) {
+    return gms;
+  }
+  if (hasMinus) {
+    return `${gms} ${negDir}`;
+  }
+  if (hasPlus) {
+    return `${gms} ${posDir}`;
+  }
+  return gms;
 }
 
 function normalizeMatchText(value?: string | null): string {
@@ -1187,7 +1280,8 @@ export const EcosystemHub: React.FC<EcosystemHubProps> = ({
                           </div>
                           <div className="font-mono text-slate-700">
                             <span className="font-sans text-slate-400">Lat/Long:</span>{' '}
-                            {formatCellValue(dam.latitude)} / {formatCellValue(dam.longitude)}
+                            {formatBarragemV2CoordinateGms(dam.latitude, 'lat')} /{' '}
+                            {formatBarragemV2CoordinateGms(dam.longitude, 'long')}
                           </div>
                         </td>
                         <td className="px-5 py-4 text-xs text-slate-600 space-y-1">
