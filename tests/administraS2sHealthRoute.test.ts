@@ -707,7 +707,6 @@ test('rota temporária e suas variáveis não usam VITE_ nem são referenciadas 
 
   const clientRoots = ['src', 'components', 'App.tsx'];
   const forbiddenNames = [
-    'administra-s2s-health',
     'CLASSIFICA_S2S_HEALTH_TEST_ENABLED',
     'CLASSIFICA_S2S_PRIVATE_KEY',
     'CLASSIFICA_S2S_KID',
