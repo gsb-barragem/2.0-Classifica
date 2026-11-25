@@ -5,7 +5,10 @@ import { SolicitacaoVistoriaPrefill, SolicitacaoVistoriaRecord } from '../types'
 import {
   containsCpfOrCnpj,
   createSolicitacaoVistoria,
+  formatDpaCriSuffix,
+  SOLICITACAO_DADOS_PRE_MAX_LENGTH,
   SOLICITACAO_RELATO_MAX_LENGTH,
+  SOLICITACAO_RELATO_MIN_LENGTH,
 } from '../src/services/solicitacoesVistoriaService';
 
 interface SolicitarVistoriaModalProps {
@@ -24,11 +27,13 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
   prefill,
   onSuccess,
 }) => {
+  const [origemRefId, setOrigemRefId] = useState('');
   const [barragemId, setBarragemId] = useState('');
   const [barragemNome, setBarragemNome] = useState('');
   const [municipio, setMunicipio] = useState('');
   const [cursoAgua, setCursoAgua] = useState('');
   const [coordenadas, setCoordenadas] = useState('');
+  const [uso, setUso] = useState('');
   const [empreendedorId, setEmpreendedorId] = useState('');
   const [empreendedorNome, setEmpreendedorNome] = useState('');
   const [processo, setProcesso] = useState('');
@@ -42,11 +47,13 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     setError(null);
+    setOrigemRefId(prefill?.origem_ref_id || '');
     setBarragemId(prefill?.barragem_id || '');
     setBarragemNome(prefill?.barragem_nome || '');
     setMunicipio(prefill?.municipio || '');
     setCursoAgua(prefill?.curso_agua || '');
     setCoordenadas(prefill?.coordenadas || '');
+    setUso(prefill?.uso || '');
     setEmpreendedorId(prefill?.empreendedor_id || '');
     setEmpreendedorNome(prefill?.empreendedor_nome || '');
     setProcesso(prefill?.processo || '');
@@ -58,8 +65,14 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
 
   if (!isOpen) return null;
 
+  const dpaCriSuffix = formatDpaCriSuffix(dpa, cri);
+  const suffixReserve = dpaCriSuffix ? dpaCriSuffix.length + 1 : 0;
+  const maxRelatoInput = Math.max(
+    SOLICITACAO_RELATO_MIN_LENGTH,
+    SOLICITACAO_RELATO_MAX_LENGTH - suffixReserve
+  );
   const hasCpfCnpj = containsCpfOrCnpj(relato);
-  const remaining = SOLICITACAO_RELATO_MAX_LENGTH - relato.length;
+  const remaining = maxRelatoInput - relato.length;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,8 +83,12 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
       setError('O relato técnico é obrigatório.');
       return;
     }
-    if (trimmedRelato.length > SOLICITACAO_RELATO_MAX_LENGTH) {
-      setError(`O relato não pode ultrapassar ${SOLICITACAO_RELATO_MAX_LENGTH} caracteres.`);
+    if (trimmedRelato.length < SOLICITACAO_RELATO_MIN_LENGTH) {
+      setError(`O relato deve ter pelo menos ${SOLICITACAO_RELATO_MIN_LENGTH} caracteres.`);
+      return;
+    }
+    if (trimmedRelato.length > maxRelatoInput) {
+      setError(`O relato não pode ultrapassar ${maxRelatoInput} caracteres.`);
       return;
     }
     if (containsCpfOrCnpj(trimmedRelato)) {
@@ -82,11 +99,13 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
     setSubmitting(true);
     try {
       const created = await createSolicitacaoVistoria({
+        origem_ref_id: origemRefId || null,
         barragem_id: barragemId || null,
         barragem_nome: barragemNome || null,
         municipio: municipio || null,
         curso_agua: cursoAgua || null,
         coordenadas: coordenadas || null,
+        uso: uso || null,
         empreendedor_id: empreendedorId || null,
         empreendedor_nome: empreendedorNome || null,
         processo: processo || null,
@@ -116,6 +135,11 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
             <p className="text-xs text-slate-500 mt-1">
               Encaminhamento técnico com dados do empreendimento e barragem para verificação em campo.
             </p>
+            {origemRefId && (
+              <p className="text-[10px] font-mono text-slate-400 mt-1">
+                Ref. parecer/classificação: {origemRefId}
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -145,7 +169,7 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
               </label>
               <input
                 className={inputClass}
-                maxLength={200}
+                maxLength={SOLICITACAO_DADOS_PRE_MAX_LENGTH}
                 placeholder="Nome da barragem"
                 value={barragemNome}
                 onChange={(e) => setBarragemNome(e.target.value)}
@@ -163,7 +187,7 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
               </label>
               <input
                 className={inputClass}
-                maxLength={200}
+                maxLength={SOLICITACAO_DADOS_PRE_MAX_LENGTH}
                 placeholder="Nome ou razão social (sem CPF/CNPJ)"
                 value={empreendedorNome}
                 onChange={(e) => setEmpreendedorNome(e.target.value)}
@@ -181,7 +205,7 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
               </label>
               <input
                 className={inputClass}
-                maxLength={120}
+                maxLength={SOLICITACAO_DADOS_PRE_MAX_LENGTH}
                 value={municipio}
                 onChange={(e) => setMunicipio(e.target.value)}
               />
@@ -193,7 +217,7 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
               </label>
               <input
                 className={inputClass}
-                maxLength={160}
+                maxLength={SOLICITACAO_DADOS_PRE_MAX_LENGTH}
                 value={cursoAgua}
                 onChange={(e) => setCursoAgua(e.target.value)}
               />
@@ -205,9 +229,21 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
               </label>
               <input
                 className={`${inputClass} font-mono text-xs`}
-                maxLength={120}
+                maxLength={SOLICITACAO_DADOS_PRE_MAX_LENGTH}
                 value={coordenadas}
                 onChange={(e) => setCoordenadas(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">
+                Uso / Finalidade
+              </label>
+              <input
+                className={inputClass}
+                maxLength={SOLICITACAO_DADOS_PRE_MAX_LENGTH}
+                value={uso}
+                onChange={(e) => setUso(e.target.value)}
               />
             </div>
 
@@ -229,13 +265,13 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
               </label>
               <input
                 className={inputClass}
-                maxLength={160}
+                maxLength={SOLICITACAO_DADOS_PRE_MAX_LENGTH}
                 value={classificacaoAtual}
                 onChange={(e) => setClassificacaoAtual(e.target.value)}
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="md:col-span-2 grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">
                   DPA
@@ -271,18 +307,24 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
                   remaining < 0 ? 'text-red-600' : remaining < 100 ? 'text-amber-600' : 'text-slate-400'
                 }`}
               >
-                {relato.length} / {SOLICITACAO_RELATO_MAX_LENGTH}
+                {relato.length} / {maxRelatoInput}
               </span>
             </div>
             <textarea
               required
               rows={4}
-              maxLength={SOLICITACAO_RELATO_MAX_LENGTH}
-              placeholder="Descreva os pontos técnicos que motivam a vistoria em campo (não informe CPF/CNPJ)."
+              minLength={SOLICITACAO_RELATO_MIN_LENGTH}
+              maxLength={maxRelatoInput}
+              placeholder="Descreva os pontos técnicos que motivam a vistoria em campo (mínimo 3 caracteres, sem CPF/CNPJ)."
               className={`${inputClass} ${hasCpfCnpj ? 'border-red-400 focus:ring-red-400' : ''}`}
               value={relato}
               onChange={(e) => setRelato(e.target.value)}
             />
+            {dpaCriSuffix && (
+              <p className="text-[11px] text-slate-500 mt-1">
+                Será anexado ao final do relato: <span className="font-mono">{dpaCriSuffix}</span>
+              </p>
+            )}
             {hasCpfCnpj && (
               <p className="text-xs text-red-600 mt-1 font-medium">
                 Não é permitido informar CPF ou CNPJ no relato.
@@ -300,7 +342,11 @@ export const SolicitarVistoriaModal: React.FC<SolicitarVistoriaModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={submitting || !relato.trim() || hasCpfCnpj}
+              disabled={
+                submitting ||
+                relato.trim().length < SOLICITACAO_RELATO_MIN_LENGTH ||
+                hasCpfCnpj
+              }
               className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {submitting ? (

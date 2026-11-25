@@ -20,6 +20,11 @@ type NodeRes = ServerResponse & {
   json?: (payload: unknown) => void;
 };
 
+export interface AdministraLeituraDeps {
+  verifySession?: typeof verifyClassificaSession;
+  getAdministraClient?: typeof getAdministraServerClient;
+}
+
 const ALLOWED_ACTIONS = new Set<AdministraLeituraAction>([
   'diagnostico',
   'empreendedores',
@@ -652,7 +657,11 @@ function indexById(
   return map;
 }
 
-export default async function handler(req: NodeReq, res: NodeRes): Promise<void> {
+export function createAdministraLeituraHandler(deps: AdministraLeituraDeps = {}) {
+  const verifySession = deps.verifySession ?? verifyClassificaSession;
+  const resolveAdministraClient = deps.getAdministraClient ?? getAdministraServerClient;
+
+  return async function handler(req: NodeReq, res: NodeRes): Promise<void> {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     sendJson(res, 405, { ok: false, code: 'METHOD_NOT_ALLOWED', error: 'Método não permitido. Use POST.' });
@@ -673,7 +682,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
     return;
   }
 
-  const sessionCheck = await verifyClassificaSession(token);
+  const sessionCheck = await verifySession(token);
   if (sessionCheck.ok === false) {
     sendJson(res, sessionCheck.status, {
       ok: false,
@@ -683,7 +692,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
     return;
   }
 
-  const administraCheck = getAdministraServerClient(sessionCheck.classificaUrl);
+  const administraCheck = resolveAdministraClient(sessionCheck.classificaUrl);
   if (administraCheck.ok === false) {
     sendJson(res, administraCheck.status, {
       ok: false,
@@ -1088,4 +1097,7 @@ export default async function handler(req: NodeReq, res: NodeRes): Promise<void>
     },
     relationErrors,
   });
+  };
 }
+
+export default createAdministraLeituraHandler();

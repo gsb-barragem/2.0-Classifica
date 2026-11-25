@@ -33,6 +33,7 @@ import {
   saveBarragemMaster,
   syncClassificaProductToAdministra,
 } from '../src/services/administraService';
+import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../src/config/integrationArchitecture';
 import { supabase } from '../src/supabaseClient';
 import {
   buildSuggestedParecerText,
@@ -456,13 +457,19 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     const longGms = normalizeCoordinateToGMS(formData.barragemPrincipal?.long);
     const coords =
       [latGms, longGms].filter(Boolean).join(' / ') || formData.coordenadas || null;
+    const uso =
+      formData.finalidade === 'Outro'
+        ? formData.finalidadeOutro || null
+        : formData.finalidade || null;
 
     return {
+      origem_ref_id: formData.id || null,
       barragem_id: formData.barragemId || formData.barragemPrincipal?.barragemId || null,
       barragem_nome: formData.barragemPrincipal?.nome || null,
       municipio: formData.municipio || null,
       curso_agua: formData.cursoAgua || null,
       coordenadas: coords,
+      uso,
       empreendedor_id: formData.empreendedorId || null,
       empreendedor_nome: formData.razaoSocial || formData.interessado || null,
       processo: formData.protocolo || formData.sistemaInformacoes?.processo || null,
@@ -471,6 +478,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       cri: hideCriSection ? null : derived.cri?.risco || null,
     };
   }, [
+    formData.id,
     formData.barragemId,
     formData.barragemPrincipal?.barragemId,
     formData.barragemPrincipal?.nome,
@@ -479,6 +487,8 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     formData.municipio,
     formData.cursoAgua,
     formData.coordenadas,
+    formData.finalidade,
+    formData.finalidadeOutro,
     formData.empreendedorId,
     formData.razaoSocial,
     formData.interessado,
@@ -1035,8 +1045,13 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       .filter((v): v is string => Boolean(v));
 
     const administraPendencias: string[] = [];
+    const writeBlocked = CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked;
     if (formData.razaoSocial?.trim() && !formData.empreendedorId) {
-      administraPendencias.push('Cadastrar Empreendedor na base de dados do Administra');
+      administraPendencias.push(
+        writeBlocked
+          ? 'Vincular Empreendedor a um identificador do Administra (gravação direta bloqueada)'
+          : 'Cadastrar Empreendedor na base de dados do Administra'
+      );
     }
 
     const principalFilled = Boolean(
@@ -1045,14 +1060,20 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         formData.barragemPrincipal?.long?.trim()
     );
     if (principalFilled && !(formData.barragemId || formData.barragemPrincipal?.barragemId)) {
-      administraPendencias.push('Cadastrar Barragem Principal na base de dados do Administra');
+      administraPendencias.push(
+        writeBlocked
+          ? 'Vincular Barragem Principal a um identificador do Administra (gravação direta bloqueada)'
+          : 'Cadastrar Barragem Principal na base de dados do Administra'
+      );
     }
 
     (formData.barragensMontante || []).forEach((bm, i) => {
       const filled = Boolean(bm.nome?.trim() || bm.lat?.trim() || bm.long?.trim());
       if (filled && !bm.barragemId) {
         administraPendencias.push(
-          `Cadastrar Barragem a Montante (${bm.nome || `Barragem ${i + 1}`}) na base de dados do Administra`
+          writeBlocked
+            ? `Vincular Barragem a Montante (${bm.nome || `Barragem ${i + 1}`}) a um identificador do Administra (gravação direta bloqueada)`
+            : `Cadastrar Barragem a Montante (${bm.nome || `Barragem ${i + 1}`}) na base de dados do Administra`
         );
       }
     });
@@ -1060,7 +1081,9 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     (formData.responsaveisTecnicos || []).forEach((rt, i) => {
       if (rt.nome?.trim() && !(rt.rtId || rt.registeredInAdministra)) {
         administraPendencias.push(
-          `Cadastrar Responsável Técnico (${rt.nome || `RT ${i + 1}`}) na base de dados do Administra`
+          writeBlocked
+            ? `Vincular Responsável Técnico (${rt.nome || `RT ${i + 1}`}) a um identificador do Administra (gravação direta bloqueada)`
+            : `Cadastrar Responsável Técnico (${rt.nome || `RT ${i + 1}`}) na base de dados do Administra`
         );
       }
     });

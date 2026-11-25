@@ -37,6 +37,7 @@ import {
   SYSTEM_LABELS,
 } from '../src/services/administraService';
 import { isAdministraConfigured } from '../src/lib/ecosystemClients';
+import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../src/config/integrationArchitecture';
 import { DataContext } from '../src/contexts/DataContext';
 import { AuthContext } from '../src/contexts/AuthContext';
 
@@ -101,6 +102,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
 }) => {
   const { documents } = useContext(DataContext);
   const { currentUser } = useContext(AuthContext);
+  const isMasterWriteBlocked = CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked;
   const rtSearchInputRef = useRef<HTMLInputElement>(null);
   const [registeringRtEntryId, setRegisteringRtEntryId] = useState<string | null>(null);
   const [linkedRtFeedback, setLinkedRtFeedback] = useState<string | null>(null);
@@ -496,7 +498,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     async (rt: ResponsavelTecnicoSearchItem) => {
       const initialArts = rt.arts || [];
       setRtArts(initialArts);
-      setRtArtMode(initialArts.length > 0 ? 'existing' : 'new');
+      setRtArtMode(initialArts.length > 0 || isMasterWriteBlocked ? 'existing' : 'new');
       setLoadingRtArts(true);
       try {
         const res = await listArtsForRt(rt.id);
@@ -509,7 +511,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
         setLoadingRtArts(false);
       }
     },
-    [mergeRtArts]
+    [mergeRtArts, isMasterWriteBlocked]
   );
 
   const handleUseRt = (rt: ResponsavelTecnicoSearchItem) => {
@@ -559,6 +561,13 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     setArtActionError(null);
     setArtActionSuccess(null);
 
+    if (isMasterWriteBlocked) {
+      setArtActionError(
+        'Gravação direta de ART no Administra Barragens está bloqueada até a implantação da API de escrita híbrida.'
+      );
+      return;
+    }
+
     if (!currentUser) {
       setArtActionError('Usuário não autenticado para salvar no Administra Barragens.');
       return;
@@ -583,7 +592,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
         currentUser
       );
 
-      if (!res.success || !res.data) {
+      if (!res.success || !res.data || res.blocked) {
         setArtActionError(res.message || 'Não foi possível salvar a ART no Administra.');
         return;
       }
@@ -621,6 +630,12 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
 
   const handleCreateNewRt = async () => {
     setNewRtError(null);
+    if (isMasterWriteBlocked) {
+      setNewRtError(
+        'Cadastro direto de Responsável Técnico no Administra Barragens está bloqueado até a implantação da API de escrita híbrida.'
+      );
+      return;
+    }
     if (!currentUser) {
       setNewRtError('Usuário não autenticado para cadastrar no Administra Barragens.');
       return;
@@ -738,7 +753,16 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
 
         {!readOnly && (
           <div className="flex flex-row sm:flex-col items-stretch sm:items-end gap-2 shrink-0">
-            {onSaveToAdministra && (
+            {onSaveToAdministra && isMasterWriteBlocked && (
+              <span
+                title="Gravação direta de cadastros mestres no Administra está bloqueada até a aprovação da API de escrita híbrida."
+                className="px-3 py-1.5 rounded-xl bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-bold flex items-center justify-center gap-1.5"
+              >
+                <Lock size={13} />
+                Escrita no Administra bloqueada (somente leitura)
+              </span>
+            )}
+            {onSaveToAdministra && !isMasterWriteBlocked && (
               <button
                 type="button"
                 onClick={() => void onSaveToAdministra()}
@@ -1010,20 +1034,27 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                   <UserPlus size={13} className="text-emerald-600" />
                   VINCULAR RT DA BASE
                 </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCreateRtForm((prev) => !prev);
-                    setNewRtError(null);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold inline-flex items-center gap-1 shadow-sm transition-colors"
-                >
-                  {showCreateRtForm ? <X size={12} /> : <Plus size={12} />}
-                  {showCreateRtForm ? 'Fechar cadastro de RT' : 'Cadastrar novo RT'}
-                </button>
+                {isMasterWriteBlocked ? (
+                  <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-semibold inline-flex items-center gap-1">
+                    <Lock size={11} />
+                    Cadastro direto de RT bloqueado
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateRtForm((prev) => !prev);
+                      setNewRtError(null);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold inline-flex items-center gap-1 shadow-sm transition-colors"
+                  >
+                    {showCreateRtForm ? <X size={12} /> : <Plus size={12} />}
+                    {showCreateRtForm ? 'Fechar cadastro de RT' : 'Cadastrar novo RT'}
+                  </button>
+                )}
               </div>
 
-              {showCreateRtForm && (
+              {!isMasterWriteBlocked && showCreateRtForm && (
                 <div className="rounded-xl border border-emerald-200 bg-white p-3.5 space-y-3 shadow-sm">
                   <div className="text-xs font-black uppercase tracking-wider text-emerald-800">
                     Novo Responsável Técnico no Administra Barragens
@@ -1227,16 +1258,18 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                   ) : (
                     <div className="px-4 py-4 text-xs text-slate-500 flex items-center justify-between gap-2">
                       <span>Nenhum RT encontrado para &ldquo;{rtTerm}&rdquo;.</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowCreateRtForm(true);
-                          setNewRtForm((prev) => ({ ...prev, nome: rtTerm.trim() }));
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold shrink-0"
-                      >
-                        + Cadastrar este RT
-                      </button>
+                      {!isMasterWriteBlocked && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowCreateRtForm(true);
+                            setNewRtForm((prev) => ({ ...prev, nome: rtTerm.trim() }));
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold shrink-0"
+                        >
+                          + Cadastrar este RT
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1314,24 +1347,26 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                     >
                       Vincular ART já cadastrada ({rtArts.length})
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRtArtMode('new');
-                        setArtActionError(null);
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors inline-flex items-center gap-1 ${
-                        rtArtMode === 'new'
-                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      <Plus size={13} />
-                      Cadastrar nova ART para este RT
-                    </button>
+                    {!isMasterWriteBlocked && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRtArtMode('new');
+                          setArtActionError(null);
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors inline-flex items-center gap-1 ${
+                          rtArtMode === 'new'
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <Plus size={13} />
+                        Cadastrar nova ART para este RT
+                      </button>
+                    )}
                   </div>
 
-                  {rtArtMode === 'existing' && (
+                  {(rtArtMode === 'existing' || isMasterWriteBlocked) && (
                     <div className="space-y-2">
                       {loadingRtArts ? (
                         <div className="text-xs text-slate-500 flex items-center gap-2 py-2">
@@ -1340,14 +1375,19 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                         </div>
                       ) : rtArts.length === 0 ? (
                         <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 flex flex-wrap items-center justify-between gap-2">
-                          <span>Nenhuma ART cadastrada para este RT no Administra.</span>
-                          <button
-                            type="button"
-                            onClick={() => setRtArtMode('new')}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-[11px] hover:bg-emerald-700"
-                          >
-                            Cadastrar nova ART
-                          </button>
+                          <span>
+                            Nenhuma ART cadastrada para este RT no Administra
+                            {isMasterWriteBlocked ? ' (cadastro direto bloqueado).' : '.'}
+                          </span>
+                          {!isMasterWriteBlocked && (
+                            <button
+                              type="button"
+                              onClick={() => setRtArtMode('new')}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-[11px] hover:bg-emerald-700"
+                            >
+                              Cadastrar nova ART
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <div className="space-y-1.5 max-h-48 overflow-y-auto">
@@ -1403,7 +1443,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                     </div>
                   )}
 
-                  {rtArtMode === 'new' && (
+                  {!isMasterWriteBlocked && rtArtMode === 'new' && (
                     <div className="space-y-2.5 rounded-lg bg-slate-50 border border-slate-200 p-3">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                         <div>
@@ -1554,7 +1594,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                           )}
                         </div>
                         <span className="text-[11px] text-slate-600">ART: {rt.art || '—'}</span>
-                        {!isRegistered && !readOnly && onRegisterLinkedRT && currentUser && (
+                        {!isRegistered && !readOnly && onRegisterLinkedRT && currentUser && !isMasterWriteBlocked && (
                           <button
                             type="button"
                             disabled={isRegLoading}
@@ -1572,7 +1612,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                                   },
                                   currentUser
                                 );
-                                if (res.success && res.data?.rt?.id) {
+                                if (res.success && res.data?.rt?.id && !res.blocked) {
                                   onRegisterLinkedRT(
                                     rt.id,
                                     res.data.rt.id,
@@ -1596,6 +1636,11 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                             )}
                             Cadastrar Responsável Técnico na base de dados
                           </button>
+                        )}
+                        {!isRegistered && !readOnly && isMasterWriteBlocked && (
+                          <span className="mt-1 text-[10px] font-semibold text-amber-800">
+                            RT sem vínculo ao Administra (gravação direta bloqueada).
+                          </span>
                         )}
                       </div>
                       {!readOnly && onRemoveRT && (
@@ -1676,6 +1721,8 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
           <Database size={13} className="shrink-0" />
           {selectedEmpreendedorId
             ? 'Empreendedor vinculado à base central do Administra.'
+            : isMasterWriteBlocked
+            ? 'Empreendedor não vinculado ao ID do Administra — gravação direta bloqueada; selecione pela busca acima quando disponível.'
             : 'Empreendedor não vinculado — mantido localmente em Rascunho; cadastre na base de dados antes de concluir.'}
         </div>
 
@@ -1689,12 +1736,16 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
           <Waves size={13} className="shrink-0" />
           {selectedBarragemId
             ? 'Barragem vinculada à base central do Administra.'
+            : isMasterWriteBlocked
+            ? 'Barragem não vinculada ao ID do Administra — gravação direta bloqueada; selecione pela busca acima quando disponível.'
             : 'Barragem não vinculada — mantida localmente em Rascunho; cadastre na base de dados antes de concluir.'}
         </div>
 
         <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold border bg-blue-50 text-blue-700 border-blue-200">
           <Pencil size={13} className="shrink-0" />
-          Dados preenchidos manualmente exigem clique em &quot;Cadastrar ... na base de dados&quot; para concluir o documento.
+          {isMasterWriteBlocked
+            ? 'Administra Barragens é a fonte única dos cadastros mestres; gravação direta pelo Classifica 2.0 está bloqueada até a API híbrida.'
+            : 'Dados preenchidos manualmente exigem clique em "Cadastrar ... na base de dados" para concluir o documento.'}
         </div>
       </div>
 

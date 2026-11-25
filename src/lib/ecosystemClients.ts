@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { EcosystemSystemStatus } from '../../types';
 import { isPrivilegedJwtKey, isSupabaseConfigured, isValidSupabaseUrl, validatePublicSupabaseEnv } from '../supabaseClient';
+export { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../config/integrationArchitecture';
 
 let administraClient: SupabaseClient | undefined;
 let notificaClient: SupabaseClient | undefined;

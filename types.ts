@@ -237,6 +237,7 @@ export interface ParecerData {
   created_at?: string;
   sistemaInformacoes?: InformacaoEmpreendedor;
   empreendedorId?: string;
+  empreendimentoId?: string;
   barragemId?: string;
   sistemaOrigem?: SistemaOrigem;
 }
@@ -290,6 +291,7 @@ export interface OficioData {
   tipo_oficio?: '1° Ofício de Pendências' | '2° Ofício de Pendências' | 'Ofício Geral';
   created_at?: string;
   empreendedorId?: string;
+  empreendimentoId?: string;
   barragemId?: string;
   sistemaOrigem?: SistemaOrigem;
 }
@@ -344,6 +346,7 @@ export interface NoObligatoryData {
   long?: string;
   empreendedor?: string;
   empreendedorId?: string;
+  empreendimentoId?: string;
   barragemId?: string;
   sistemaOrigem?: SistemaOrigem;
 }
@@ -433,6 +436,7 @@ export interface RejectionData {
   long?: string;
   empreendedor?: string;
   empreendedorId?: string;
+  empreendimentoId?: string;
   barragemId?: string;
   sistemaOrigem?: SistemaOrigem;
 }
@@ -492,6 +496,7 @@ export interface TransferData {
   empreendedor?: string;
   // Ecosystem integration canonical references
   empreendedorId?: string;
+  empreendimentoId?: string;
   barragemId?: string;
   sistemaOrigem?: SistemaOrigem;
 }
@@ -506,13 +511,59 @@ export type SistemaOrigem =
   | 'NOTIFICA_CSB'
   | 'FISCALIZA_BARRAGENS';
 
-export type EntidadeTipoEcossistema =
+export type AdministraEntidadeMestra =
   | 'empreendedor'
+  | 'empreendimento'
   | 'barragem'
-  | 'responsavel_tecnico'
+  | 'responsavel_tecnico';
+
+export type EntidadeTipoEcossistema =
+  | AdministraEntidadeMestra
   | 'produto';
 
 export type SolicitacaoStatus = 'pendente' | 'aprovada' | 'reprovada';
+
+export type PoliticaMigracaoAdministra = 'hibrida_deterministica';
+
+export type MasterWriteApiStatus =
+  | 'bloqueada_aguardando_api_hibrida'
+  | 'ativa';
+
+export interface AdministraEndpointPolicy {
+  path: string;
+  method: 'POST';
+  mode: 'somente_leitura' | 'bloqueado';
+  blocked: boolean;
+  httpStatusWhenBlocked?: 409;
+  allowedActions?: readonly string[];
+  blockedActions?: readonly string[];
+}
+
+export type PropostaCadastroAdministraStatus =
+  | 'elegivel_criacao_automatica'
+  | 'revisao_humana_ambigua'
+  | 'rejeitada_validacao';
+
+export interface AdministraEntityReference {
+  entidade: AdministraEntidadeMestra;
+  administraId: string;
+  fonteUnica: 'ADMINISTRA_BARRAGENS';
+}
+
+export interface PropostaCadastroAdministraContract<
+  TPayload = Record<string, unknown>
+> {
+  entidade: AdministraEntidadeMestra;
+  sistemaProponente: 'CLASSIFICA_CSB';
+  sistemaDestino: 'ADMINISTRA_BARRAGENS';
+  politicaMigracao: PoliticaMigracaoAdministra;
+  statusElegibilidade: PropostaCadastroAdministraStatus;
+  validacaoDeterministicaAprovada: boolean;
+  duplicidadeDeterministicaDetectada: boolean;
+  requerRevisaoHumana: boolean;
+  motivoPendencia?: string | null;
+  dadosPropostos: TPayload;
+}
 
 export interface EmpreendedorMaster {
   id: string;
@@ -525,6 +576,20 @@ export interface EmpreendedorMaster {
   endereco?: string | null;
   municipio?: string | null;
   num_car?: string | null;
+  sistema_origem: SistemaOrigem;
+  created_by_user_id?: string | null;
+  created_by_name?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface EmpreendimentoMaster {
+  id: string;
+  empreendedor_id?: string | null;
+  nome: string;
+  num_car?: string | null;
+  municipio?: string | null;
+  localizacao?: string | null;
   sistema_origem: SistemaOrigem;
   created_by_user_id?: string | null;
   created_by_name?: string | null;
@@ -728,6 +793,7 @@ export interface UpdatePendenciaInput {
 // ============================================================================
 
 export type SolicitacaoVistoriaStatus =
+  | 'solicitada'
   | 'pendente'
   | 'aberta'
   | 'em_planejamento'
@@ -743,6 +809,7 @@ export interface SolicitacaoVistoriaEquipeMembro {
 export interface SolicitacaoVistoriaRecord {
   id: string;
   sistema_origem: 'classifica';
+  origem_ref_id: string | null;
   status: SolicitacaoVistoriaStatus | string;
   relato: string;
   barragem_id: string | null;
@@ -750,6 +817,7 @@ export interface SolicitacaoVistoriaRecord {
   municipio: string | null;
   curso_agua: string | null;
   coordenadas: string | null;
+  uso: string | null;
   empreendedor_id: string | null;
   empreendedor_nome: string | null;
   processo: string | null;
@@ -763,17 +831,19 @@ export interface SolicitacaoVistoriaRecord {
   data_realizacao: string | null;
   equipe: Array<SolicitacaoVistoriaEquipeMembro | string>;
   observacao_campo: string | null;
-  motivo_cancelamento: string | null;
+  motivo: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
 
 export interface SolicitacaoVistoriaPrefill {
+  origem_ref_id?: string | null;
   barragem_id?: string | null;
   barragem_nome?: string | null;
   municipio?: string | null;
   curso_agua?: string | null;
   coordenadas?: string | null;
+  uso?: string | null;
   empreendedor_id?: string | null;
   empreendedor_nome?: string | null;
   processo?: string | null;
@@ -788,7 +858,6 @@ export interface CreateSolicitacaoVistoriaInput extends SolicitacaoVistoriaPrefi
 
 export interface UpdateSolicitacaoVistoriaInput {
   relato?: string;
-  acao?: 'editar' | 'cancelar';
-  motivo_cancelamento?: string | null;
+  motivo?: string | null;
 }
 

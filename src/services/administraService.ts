@@ -14,12 +14,18 @@ import {
   getNotificaReadOnlyClient,
   isAdministraConfigured,
 } from '../lib/ecosystemClients';
+import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../config/integrationArchitecture';
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { logActivity } from '../lib/auditService';
 import { AppDocument } from '../contexts/DataContext';
-import { normalizeCoordinateToGMS, parseGMSToDecimal } from '../utils/coordinateUtils';
+import { normalizeCoordinateToGMS } from '../utils/coordinateUtils';
 
 const CURRENT_SYSTEM: SistemaOrigem = 'CLASSIFICA_CSB';
+
+export const ADMINISTRA_MASTER_WRITE_BLOCKED_CODE =
+  CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blockCode;
+export const ADMINISTRA_MASTER_WRITE_BLOCKED_MESSAGE =
+  'Gravação direta de cadastros mestres no Administra Barragens está bloqueada no Classifica 2.0 até a implantação da API de escrita aprovada com validação híbrida.';
 
 export const SYSTEM_LABELS: Record<SistemaOrigem, string> = {
   CLASSIFICA_CSB: '2.0 Classifica CSB',
@@ -39,10 +45,21 @@ export function normalizeText(value?: string | null): string {
 export interface MasterWriteResult<T> {
   success: boolean;
   data?: T;
+  blocked?: boolean;
+  code?: string;
   ownershipConflict?: boolean;
   ownerSystem?: SistemaOrigem;
   notConfigured?: boolean;
   message?: string;
+}
+
+function buildBlockedMasterWriteResult<T>(message?: string): MasterWriteResult<T> {
+  return {
+    success: false,
+    blocked: true,
+    code: ADMINISTRA_MASTER_WRITE_BLOCKED_CODE,
+    message: message || ADMINISTRA_MASTER_WRITE_BLOCKED_MESSAGE,
+  };
 }
 
 // ============================================================================
@@ -604,6 +621,10 @@ export async function saveEmpreendedorMaster(
     return { success: false, message: 'Usuários com perfil Visualizador não podem cadastrar ou alterar dados mestres.' };
   }
 
+  if (CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked) {
+    return buildBlockedMasterWriteResult();
+  }
+
   const cleanRazao = normalizeText(payload.razao_social);
   if (cleanRazao.length < 2) {
     return { success: false, message: 'Informe o nome ou razão social do empreendedor.' };
@@ -614,7 +635,6 @@ export async function saveEmpreendedorMaster(
     return { success: false, message: 'Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) válido, ou deixe o campo em branco caso não disponível.' };
   }
 
-  // Regra estrita de propriedade: o Classifica só edita registros gerados pelo próprio Classifica.
   if (payload.id && payload.sistema_origem && !canClassificaEditDirectly(payload.sistema_origem)) {
     return {
       success: false,
@@ -653,47 +673,16 @@ export async function saveEmpreendedorMaster(
       return { success: true, data: mapped };
     }
 
-    if (serverRes.code !== 'ENDPOINT_UNAVAILABLE') {
-      return {
-        success: false,
-        notConfigured: !serverRes.configured,
-        message: serverRes.message || 'Não foi possível salvar o empreendedor no Administra Barragens.',
-      };
+    if (serverRes.blocked || serverRes.status === 409) {
+      return buildBlockedMasterWriteResult(serverRes.message);
     }
 
-    const client = getAdministraClient();
-    if (!client) {
-      return { success: false, notConfigured: true, message: 'Administra Barragens ainda não está conectado neste ambiente.' };
-    }
-
-    const rpcRes = await client.rpc('administra_upsert_empreendedor', {
-      p_id: payload.id || null,
-      p_sistema_solicitante: CURRENT_SYSTEM,
-      p_user_id: currentUser.authUserId,
-      p_user_name: currentUser.name,
-      p_dados: cleanPayload,
-    });
-
-    if (rpcRes.error) {
-      if (rpcRes.error.message?.includes('OWNERSHIP_CONFLICT')) {
-        return {
-          success: false,
-          ownershipConflict: true,
-          ownerSystem: payload.sistema_origem,
-          message: 'Registro pertencente a outro sistema. Utilize o fluxo de Solicitação de Alteração.',
-        };
-      }
-      return { success: false, message: 'Não foi possível salvar o empreendedor no Administra Barragens.' };
-    }
-
-    const mapped = mapCanonicalEmpreendedor((rpcRes.data || {}) as AdministraRecord);
-    await logActivity(payload.id ? 'ECOSYSTEM_ENTITY_UPDATED' : 'ECOSYSTEM_ENTITY_CREATED', {
-      entidade: 'empreendedor',
-      empreendedor_id: mapped.id,
-      destino: 'ADMINISTRA_BARRAGENS',
-    });
-
-    return { success: true, data: mapped };
+    return {
+      success: false,
+      code: serverRes.code,
+      notConfigured: !serverRes.configured,
+      message: serverRes.message || 'Não foi possível salvar o empreendedor no Administra Barragens.',
+    };
   } catch {
     return { success: false, message: 'Erro de comunicação ao salvar empreendedor no Administra.' };
   }
@@ -705,6 +694,10 @@ export async function saveBarragemMaster(
 ): Promise<MasterWriteResult<BarragemMaster>> {
   if (currentUser.role === 'Visualizador') {
     return { success: false, message: 'Usuários com perfil Visualizador não podem cadastrar ou alterar barragens.' };
+  }
+
+  if (CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked) {
+    return buildBlockedMasterWriteResult();
   }
 
   const cleanNome = normalizeText(payload.nome);
@@ -733,16 +726,14 @@ export async function saveBarragemMaster(
     localizacao: payload.localizacao ? normalizeText(payload.localizacao) : null,
     lat_gms: normalizeCoordinateToGMS(payload.lat_gms, payload.lat_decimal) || null,
     long_gms: normalizeCoordinateToGMS(payload.long_gms, payload.long_decimal) || null,
-    lat_decimal: (() => {
-      if (typeof payload.lat_decimal === 'number' && Number.isFinite(payload.lat_decimal)) return payload.lat_decimal;
-      const parsed = payload.lat_gms ? parseGMSToDecimal(payload.lat_gms) : NaN;
-      return Number.isFinite(parsed) ? parsed : null;
-    })(),
-    long_decimal: (() => {
-      if (typeof payload.long_decimal === 'number' && Number.isFinite(payload.long_decimal)) return payload.long_decimal;
-      const parsed = payload.long_gms ? parseGMSToDecimal(payload.long_gms) : NaN;
-      return Number.isFinite(parsed) ? parsed : null;
-    })(),
+    lat_decimal:
+      typeof payload.lat_decimal === 'number' && Number.isFinite(payload.lat_decimal)
+        ? payload.lat_decimal
+        : null,
+    long_decimal:
+      typeof payload.long_decimal === 'number' && Number.isFinite(payload.long_decimal)
+        ? payload.long_decimal
+        : null,
     altura_maxima: payload.altura_maxima || null,
     comprimento_coroamento: payload.comprimento_coroamento || null,
     largura_coroamento: payload.largura_coroamento || null,
@@ -774,47 +765,16 @@ export async function saveBarragemMaster(
       return { success: true, data: mapped };
     }
 
-    if (serverRes.code !== 'ENDPOINT_UNAVAILABLE') {
-      return {
-        success: false,
-        notConfigured: !serverRes.configured,
-        message: serverRes.message || 'Não foi possível salvar a barragem no Administra Barragens.',
-      };
+    if (serverRes.blocked || serverRes.status === 409) {
+      return buildBlockedMasterWriteResult(serverRes.message);
     }
 
-    const client = getAdministraClient();
-    if (!client) {
-      return { success: false, notConfigured: true, message: 'Administra Barragens ainda não está conectado neste ambiente.' };
-    }
-
-    const rpcRes = await client.rpc('administra_upsert_barragem', {
-      p_id: payload.id || null,
-      p_sistema_solicitante: CURRENT_SYSTEM,
-      p_user_id: currentUser.authUserId,
-      p_user_name: currentUser.name,
-      p_dados: cleanPayload,
-    });
-
-    if (rpcRes.error) {
-      if (rpcRes.error.message?.includes('OWNERSHIP_CONFLICT')) {
-        return {
-          success: false,
-          ownershipConflict: true,
-          ownerSystem: payload.sistema_origem,
-          message: 'Barragem pertencente a outro sistema. Utilize o fluxo de Solicitação de Alteração.',
-        };
-      }
-      return { success: false, message: 'Não foi possível salvar a barragem no Administra Barragens.' };
-    }
-
-    const mapped = mapCanonicalBarragem((rpcRes.data || {}) as AdministraRecord);
-    await logActivity(payload.id ? 'ECOSYSTEM_ENTITY_UPDATED' : 'ECOSYSTEM_ENTITY_CREATED', {
-      entidade: 'barragem',
-      barragem_id: mapped.id,
-      destino: 'ADMINISTRA_BARRAGENS',
-    });
-
-    return { success: true, data: mapped };
+    return {
+      success: false,
+      code: serverRes.code,
+      notConfigured: !serverRes.configured,
+      message: serverRes.message || 'Não foi possível salvar a barragem no Administra Barragens.',
+    };
   } catch {
     return { success: false, message: 'Erro de comunicação ao salvar barragem no Administra.' };
   }
@@ -824,13 +784,12 @@ export async function saveResponsavelTecnicoMaster(
   payload: Partial<ResponsavelTecnicoMaster> & { nome: string },
   currentUser: User
 ): Promise<MasterWriteResult<ResponsavelTecnicoMaster>> {
-  const client = getAdministraClient();
-  if (!client) {
-    return { success: false, notConfigured: true, message: 'Administra Barragens ainda não está conectado neste ambiente.' };
-  }
-
   if (currentUser.role === 'Visualizador') {
     return { success: false, message: 'Usuários com perfil Visualizador não podem alterar responsáveis técnicos.' };
+  }
+
+  if (CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked) {
+    return buildBlockedMasterWriteResult();
   }
 
   if (payload.id && payload.sistema_origem && !canClassificaEditDirectly(payload.sistema_origem)) {
@@ -842,50 +801,14 @@ export async function saveResponsavelTecnicoMaster(
     };
   }
 
-  try {
-    const cleanPayload = {
-      nome: normalizeText(payload.nome),
-      cpf: payload.cpf ? normalizeDigits(payload.cpf) : null,
-      registro_profissional: payload.registro_profissional ? normalizeText(payload.registro_profissional).toUpperCase() : null,
-      email: payload.email ? payload.email.trim().toLowerCase() : null,
-      telefone: payload.telefone ? payload.telefone.trim() : null,
-    };
-
-    const rpcRes = await client.rpc('administra_upsert_rt', {
-      p_id: payload.id || null,
-      p_sistema_solicitante: CURRENT_SYSTEM,
-      p_user_id: currentUser.authUserId,
-      p_user_name: currentUser.name,
-      p_dados: cleanPayload,
-    });
-
-    if (rpcRes.error) {
-      if (rpcRes.error.message?.includes('OWNERSHIP_CONFLICT')) {
-        return {
-          success: false,
-          ownershipConflict: true,
-          ownerSystem: payload.sistema_origem,
-          message: 'Responsável técnico pertencente a outro sistema. Envie uma solicitação de alteração.',
-        };
-      }
-      return { success: false, message: 'Não foi possível salvar o responsável técnico no Administra.' };
-    }
-
-    await logActivity(payload.id ? 'ECOSYSTEM_ENTITY_UPDATED' : 'ECOSYSTEM_ENTITY_CREATED', {
-      entidade: 'responsavel_tecnico',
-      destino: 'ADMINISTRA_BARRAGENS',
-    });
-
-    return { success: true, data: rpcRes.data as ResponsavelTecnicoMaster };
-  } catch {
-    return { success: false, message: 'Erro de comunicação ao salvar responsável técnico no Administra.' };
-  }
+  return buildBlockedMasterWriteResult();
 }
 
 async function callAdministraEscritaEndpoint(
   payload: Record<string, unknown>
 ): Promise<{
   ok: boolean;
+  blocked: boolean;
   configured: boolean;
   status: number;
   data?: any;
@@ -896,10 +819,11 @@ async function callAdministraEscritaEndpoint(
   if (!token) {
     return {
       ok: false,
+      blocked: false,
       configured: false,
       status: 401,
       code: 'AUTH_REQUIRED',
-      message: 'Sessão autenticada do Classifica CSB obrigatória para gravar no Administra.',
+      message: 'Sessão autenticada do Classifica CSB obrigatória.',
     };
   }
 
@@ -917,6 +841,7 @@ async function callAdministraEscritaEndpoint(
     if (!contentType.includes('application/json')) {
       return {
         ok: false,
+        blocked: response.status === 409,
         configured: false,
         status: response.status,
         code: 'ENDPOINT_UNAVAILABLE',
@@ -925,23 +850,26 @@ async function callAdministraEscritaEndpoint(
     }
 
     const json = await response.json();
+    const isBlocked = response.status === 409 || json?.blocked === true;
     if (!response.ok || !json?.ok) {
       return {
         ok: false,
+        blocked: isBlocked,
         configured: json?.configured !== false,
         status: response.status,
         code: json?.code,
         message:
           typeof json?.error === 'string'
             ? json.error
-            : json?.error?.message || 'Erro ao gravar dados no Administra Barragens.',
+            : json?.error?.message || 'Erro ao acessar endpoint do Administra Barragens.',
       };
     }
 
-    return { ok: true, configured: true, status: response.status, data: json };
+    return { ok: true, blocked: false, configured: true, status: response.status, data: json };
   } catch (err: any) {
     return {
       ok: false,
+      blocked: false,
       configured: false,
       status: 0,
       code: 'NETWORK_ERROR',
@@ -983,6 +911,10 @@ export async function saveArtForRt(
     };
   }
 
+  if (CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked) {
+    return buildBlockedMasterWriteResult();
+  }
+
   const cleanArt = normalizeText(params.art);
   if (!params.rtId || cleanArt.length < 2) {
     return {
@@ -1010,8 +942,13 @@ export async function saveArtForRt(
     return { success: true, data: serverRes.data.artItem as RtArtVinculo };
   }
 
+  if (serverRes.blocked || serverRes.status === 409) {
+    return buildBlockedMasterWriteResult(serverRes.message);
+  }
+
   return {
     success: false,
+    code: serverRes.code,
     notConfigured: !serverRes.configured,
     message: serverRes.message || 'Não foi possível salvar a ART no Administra.',
   };
@@ -1040,6 +977,10 @@ export async function createResponsavelTecnicoInAdministra(
       success: false,
       message: 'Usuários com perfil Visualizador não podem cadastrar RTs no Administra.',
     };
+  }
+
+  if (CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked) {
+    return buildBlockedMasterWriteResult();
   }
 
   const cleanNome = normalizeText(payload.nome);
@@ -1085,35 +1026,13 @@ export async function createResponsavelTecnicoInAdministra(
     };
   }
 
-  if (serverRes.code === 'ENDPOINT_UNAVAILABLE' || !serverRes.configured) {
-    const legacyRes = await saveResponsavelTecnicoMaster(
-      {
-        nome: cleanNome,
-        cpf: payload.cpf || null,
-        registro_profissional: payload.registro_profissional || null,
-        email: payload.email || null,
-        telefone: payload.telefone || null,
-      },
-      currentUser
-    );
-    if (legacyRes.success && legacyRes.data) {
-      return {
-        success: true,
-        data: {
-          rt: { ...legacyRes.data, art: payload.art || null, arts: [] },
-          artItem: null,
-        },
-      };
-    }
-    return {
-      success: false,
-      notConfigured: legacyRes.notConfigured,
-      message: legacyRes.message,
-    };
+  if (serverRes.blocked || serverRes.status === 409) {
+    return buildBlockedMasterWriteResult(serverRes.message);
   }
 
   return {
     success: false,
+    code: serverRes.code,
     notConfigured: !serverRes.configured,
     message: serverRes.message || 'Não foi possível cadastrar o RT no Administra.',
   };

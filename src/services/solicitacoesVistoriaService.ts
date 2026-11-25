@@ -7,10 +7,15 @@ import {
 } from '../../types';
 import { isSupabaseConfigured, supabase } from '../supabaseClient';
 
+export const SOLICITACAO_RELATO_MIN_LENGTH = 3;
 export const SOLICITACAO_RELATO_MAX_LENGTH = 1000;
 export const SOLICITACAO_OBSERVACAO_MAX_LENGTH = 1000;
+export const SOLICITACAO_DADOS_PRE_MAX_LENGTH = 300;
+export const SOLICITACAO_ORIGEM_REF_MAX_LENGTH = 120;
+export const SOLICITACAO_MOTIVO_MAX_LENGTH = 500;
 
 export const SOLICITACAO_STATUS_LABELS: Record<string, string> = {
+  solicitada: 'Solicitada',
   pendente: 'Pendente',
   aberta: 'Pendente',
   em_planejamento: 'Em planejamento',
@@ -74,6 +79,33 @@ export function containsCpfOrCnpj(value?: string | null): boolean {
 function cleanOptionalText(val?: string | null): string | null {
   const trimmed = typeof val === 'string' ? val.trim() : '';
   return trimmed.length > 0 ? trimmed : null;
+}
+
+export function formatDpaCriSuffix(dpa?: string | null, cri?: string | null): string {
+  const cleanDpa = cleanOptionalText(dpa);
+  const cleanCri = cleanOptionalText(cri);
+  if (cleanDpa && cleanCri) return `DPA: ${cleanDpa} | CRI: ${cleanCri}`;
+  if (cleanDpa) return `DPA: ${cleanDpa}`;
+  if (cleanCri) return `CRI: ${cleanCri}`;
+  return '';
+}
+
+export function buildRelatoWithDpaCri(
+  baseRelato: string,
+  dpa?: string | null,
+  cri?: string | null
+): string {
+  const trimmed = baseRelato.trim();
+  const suffix = formatDpaCriSuffix(dpa, cri);
+  if (!suffix || trimmed.includes(suffix)) {
+    return trimmed;
+  }
+  const fullSuffix = `\n${suffix}`;
+  if (trimmed.length + fullSuffix.length <= SOLICITACAO_RELATO_MAX_LENGTH) {
+    return `${trimmed}${fullSuffix}`;
+  }
+  const maxBase = Math.max(SOLICITACAO_RELATO_MIN_LENGTH, SOLICITACAO_RELATO_MAX_LENGTH - fullSuffix.length);
+  return `${trimmed.slice(0, maxBase).trimEnd()}${fullSuffix}`;
 }
 
 export function isSolicitacaoAuthor(
@@ -177,50 +209,80 @@ export async function listSolicitacoesVistoria(statusFilter?: string): Promise<{
 export async function createSolicitacaoVistoria(
   input: CreateSolicitacaoVistoriaInput
 ): Promise<SolicitacaoVistoriaRecord> {
-  const relato = cleanOptionalText(input.relato);
-  if (!relato) {
+  const rawRelato = cleanOptionalText(input.relato);
+  if (!rawRelato) {
     throw new Error('Informe o relato técnico da solicitação de vistoria.');
   }
-  if (relato.length > SOLICITACAO_RELATO_MAX_LENGTH) {
+  if (rawRelato.length < SOLICITACAO_RELATO_MIN_LENGTH) {
+    throw new Error(`O relato deve ter pelo menos ${SOLICITACAO_RELATO_MIN_LENGTH} caracteres.`);
+  }
+  if (rawRelato.length > SOLICITACAO_RELATO_MAX_LENGTH) {
     throw new Error(`O relato não pode ultrapassar ${SOLICITACAO_RELATO_MAX_LENGTH} caracteres.`);
   }
-  if (containsCpfOrCnpj(relato)) {
+  if (containsCpfOrCnpj(rawRelato)) {
     throw new Error('O relato não pode conter CPF ou CNPJ. Utilize apenas referências de ID.');
   }
 
-  const fieldsToCheck: Array<[string, string | null | undefined]> = [
-    ['Nome da barragem', input.barragem_nome],
-    ['Município', input.municipio],
-    ["Curso d'água", input.curso_agua],
-    ['Coordenadas', input.coordenadas],
-    ['Nome do empreendedor', input.empreendedor_nome],
-    ['Processo', input.processo],
-    ['Classificação atual', input.classificacao_atual],
-    ['DPA', input.dpa],
-    ['CRI', input.cri],
+  const dpa = cleanOptionalText(input.dpa);
+  const cri = cleanOptionalText(input.cri);
+  if (containsCpfOrCnpj(dpa) || containsCpfOrCnpj(cri)) {
+    throw new Error('DPA e CRI não podem conter CPF ou CNPJ.');
+  }
+
+  const finalRelato = buildRelatoWithDpaCri(rawRelato, dpa, cri);
+  if (finalRelato.length > SOLICITACAO_RELATO_MAX_LENGTH) {
+    throw new Error(`O relato final não pode ultrapassar ${SOLICITACAO_RELATO_MAX_LENGTH} caracteres.`);
+  }
+
+  const origemRefId = cleanOptionalText(input.origem_ref_id);
+  if (origemRefId) {
+    if (origemRefId.length > SOLICITACAO_ORIGEM_REF_MAX_LENGTH) {
+      throw new Error(
+        `O ID de referência de origem não pode ultrapassar ${SOLICITACAO_ORIGEM_REF_MAX_LENGTH} caracteres.`
+      );
+    }
+    if (containsCpfOrCnpj(origemRefId)) {
+      throw new Error('O ID de referência de origem não pode conter CPF ou CNPJ.');
+    }
+  }
+
+  const processoReferencia = cleanOptionalText(input.processo);
+  if (processoReferencia && containsCpfOrCnpj(processoReferencia)) {
+    throw new Error('Processo não pode conter CPF ou CNPJ.');
+  }
+
+  const dadosPreEntries: Array<[string, string, string | null | undefined]> = [
+    ['nome_barragem', 'Nome da barragem', input.barragem_nome],
+    ['municipio', 'Município', input.municipio],
+    ['curso_agua', "Curso d'água", input.curso_agua],
+    ['coordenadas', 'Coordenadas', input.coordenadas],
+    ['uso', 'Uso', input.uso],
+    ['classificacao', 'Classificação atual', input.classificacao_atual],
+    ['nome_empreendedor', 'Nome do empreendedor', input.empreendedor_nome],
   ];
 
-  for (const [label, val] of fieldsToCheck) {
-    if (containsCpfOrCnpj(val)) {
+  const dados_pre_preenchidos: Record<string, string> = {};
+  for (const [key, label, rawVal] of dadosPreEntries) {
+    const cleaned = cleanOptionalText(rawVal);
+    if (!cleaned) continue;
+    if (cleaned.length > SOLICITACAO_DADOS_PRE_MAX_LENGTH) {
+      throw new Error(`${label} não pode ultrapassar ${SOLICITACAO_DADOS_PRE_MAX_LENGTH} caracteres.`);
+    }
+    if (containsCpfOrCnpj(cleaned)) {
       throw new Error(`${label} não pode conter CPF ou CNPJ.`);
     }
+    dados_pre_preenchidos[key] = cleaned;
   }
 
   const data = await callApi<{ item: SolicitacaoVistoriaRecord }>('/api/solicitacoes-vistoria', {
     method: 'POST',
     body: JSON.stringify({
-      relato,
-      barragem_id: cleanOptionalText(input.barragem_id),
-      barragem_nome: cleanOptionalText(input.barragem_nome),
-      municipio: cleanOptionalText(input.municipio),
-      curso_agua: cleanOptionalText(input.curso_agua),
-      coordenadas: cleanOptionalText(input.coordenadas),
+      relato: finalRelato,
+      origem_ref_id: origemRefId,
       empreendedor_id: cleanOptionalText(input.empreendedor_id),
-      empreendedor_nome: cleanOptionalText(input.empreendedor_nome),
-      processo: cleanOptionalText(input.processo),
-      classificacao_atual: cleanOptionalText(input.classificacao_atual),
-      dpa: cleanOptionalText(input.dpa),
-      cri: cleanOptionalText(input.cri),
+      barragem_id: cleanOptionalText(input.barragem_id),
+      processo_referencia: processoReferencia,
+      dados_pre_preenchidos,
     }),
   });
 
@@ -235,27 +297,12 @@ export async function updateSolicitacaoVistoria(
     throw new Error('Solicitação inválida.');
   }
 
-  if (input.acao === 'cancelar') {
-    const motivo = cleanOptionalText(input.motivo_cancelamento);
-    if (motivo && containsCpfOrCnpj(motivo)) {
-      throw new Error('O motivo do cancelamento não pode conter CPF ou CNPJ.');
-    }
-    const data = await callApi<{ item: SolicitacaoVistoriaRecord }>(
-      `/api/solicitacoes-vistoria/${encodeURIComponent(id.trim())}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({
-          acao: 'cancelar',
-          motivo_cancelamento: motivo,
-        }),
-      }
-    );
-    return data.item;
-  }
-
   const relato = cleanOptionalText(input.relato);
   if (!relato) {
     throw new Error('O campo relato é obrigatório.');
+  }
+  if (relato.length < SOLICITACAO_RELATO_MIN_LENGTH) {
+    throw new Error(`O relato deve ter pelo menos ${SOLICITACAO_RELATO_MIN_LENGTH} caracteres.`);
   }
   if (relato.length > SOLICITACAO_RELATO_MAX_LENGTH) {
     throw new Error(`O relato não pode ultrapassar ${SOLICITACAO_RELATO_MAX_LENGTH} caracteres.`);
@@ -269,8 +316,36 @@ export async function updateSolicitacaoVistoria(
     {
       method: 'PATCH',
       body: JSON.stringify({
-        acao: 'editar',
         relato,
+      }),
+    }
+  );
+  return data.item;
+}
+
+export async function cancelSolicitacaoVistoria(
+  id: string,
+  motivo?: string | null
+): Promise<SolicitacaoVistoriaRecord> {
+  if (!id || !id.trim()) {
+    throw new Error('Solicitação inválida.');
+  }
+  const cleanMotivo = cleanOptionalText(motivo);
+  if (cleanMotivo && cleanMotivo.length > SOLICITACAO_MOTIVO_MAX_LENGTH) {
+    throw new Error(
+      `O motivo do cancelamento não pode ultrapassar ${SOLICITACAO_MOTIVO_MAX_LENGTH} caracteres.`
+    );
+  }
+  if (cleanMotivo && containsCpfOrCnpj(cleanMotivo)) {
+    throw new Error('O motivo do cancelamento não pode conter CPF ou CNPJ.');
+  }
+
+  const data = await callApi<{ item: SolicitacaoVistoriaRecord }>(
+    `/api/solicitacoes-vistoria/${encodeURIComponent(id.trim())}/cancelar`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        motivo: cleanMotivo ?? '',
       }),
     }
   );
@@ -298,7 +373,7 @@ export async function updateSolicitacaoObservacao(
     `/api/solicitacoes-vistoria/${encodeURIComponent(id.trim())}/observacao`,
     {
       method: 'PATCH',
-      body: JSON.stringify({ observacao_campo: cleanObs }),
+      body: JSON.stringify({ observacao_campo: cleanObs ?? '' }),
     }
   );
   return data.item;

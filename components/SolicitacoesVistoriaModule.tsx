@@ -18,13 +18,16 @@ import { toast } from 'sonner';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { SolicitacaoVistoriaRecord } from '../types';
 import {
+  cancelSolicitacaoVistoria,
   containsCpfOrCnpj,
   formatEquipeMemberLabel,
   isSolicitacaoAuthor,
   isSolicitacaoEquipeMember,
   listSolicitacoesVistoria,
+  SOLICITACAO_MOTIVO_MAX_LENGTH,
   SOLICITACAO_OBSERVACAO_MAX_LENGTH,
   SOLICITACAO_RELATO_MAX_LENGTH,
+  SOLICITACAO_RELATO_MIN_LENGTH,
   SOLICITACAO_STATUS_LABELS,
   SolicitacaoActor,
   updateSolicitacaoObservacao,
@@ -33,6 +36,7 @@ import {
 import { SolicitarVistoriaModal } from './SolicitarVistoriaModal';
 
 const STATUS_BADGE_CLASSES: Record<string, string> = {
+  solicitada: 'bg-amber-100 text-amber-800 border-amber-200',
   pendente: 'bg-amber-100 text-amber-800 border-amber-200',
   aberta: 'bg-amber-100 text-amber-800 border-amber-200',
   em_planejamento: 'bg-blue-100 text-blue-800 border-blue-200',
@@ -113,6 +117,7 @@ export const SolicitacoesVistoriaModule: React.FC = () => {
         item.barragem_nome,
         item.municipio,
         item.empreendedor_nome,
+        item.uso,
         item.processo,
         item.relato,
         item.classificacao_atual,
@@ -132,6 +137,10 @@ export const SolicitacoesVistoriaModule: React.FC = () => {
       toast.error('O campo relato é obrigatório.');
       return;
     }
+    if (trimmed.length < SOLICITACAO_RELATO_MIN_LENGTH) {
+      toast.error(`O relato deve ter pelo menos ${SOLICITACAO_RELATO_MIN_LENGTH} caracteres.`);
+      return;
+    }
     if (trimmed.length > SOLICITACAO_RELATO_MAX_LENGTH) {
       toast.error(`O relato não pode ultrapassar ${SOLICITACAO_RELATO_MAX_LENGTH} caracteres.`);
       return;
@@ -143,7 +152,7 @@ export const SolicitacoesVistoriaModule: React.FC = () => {
 
     setBusyId(id);
     try {
-      await updateSolicitacaoVistoria(id, { acao: 'editar', relato: trimmed });
+      await updateSolicitacaoVistoria(id, { relato: trimmed });
       toast.success('Solicitação atualizada com sucesso.');
       setEditingId(null);
       await loadData();
@@ -156,16 +165,19 @@ export const SolicitacoesVistoriaModule: React.FC = () => {
 
   const handleConfirmCancel = async (id: string) => {
     const motivo = cancelMotivo.trim();
+    if (motivo.length > SOLICITACAO_MOTIVO_MAX_LENGTH) {
+      toast.error(
+        `O motivo do cancelamento não pode ultrapassar ${SOLICITACAO_MOTIVO_MAX_LENGTH} caracteres.`
+      );
+      return;
+    }
     if (motivo && containsCpfOrCnpj(motivo)) {
       toast.error('O motivo do cancelamento não pode conter CPF ou CNPJ.');
       return;
     }
     setBusyId(id);
     try {
-      await updateSolicitacaoVistoria(id, {
-        acao: 'cancelar',
-        motivo_cancelamento: motivo || null,
-      });
+      await cancelSolicitacaoVistoria(id, motivo || null);
       toast.success('Solicitação cancelada.');
       setCancelingId(null);
       setCancelMotivo('');
@@ -260,6 +272,7 @@ export const SolicitacoesVistoriaModule: React.FC = () => {
               className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500"
             >
               <option value="todas">Todos os status</option>
+              <option value="solicitada">Solicitada</option>
               <option value="pendente">Pendente</option>
               <option value="em_planejamento">Em planejamento</option>
               <option value="realizada">Vistoria realizada</option>
@@ -359,6 +372,7 @@ export const SolicitacoesVistoriaModule: React.FC = () => {
                           </span>
                         )}
                         {item.curso_agua && <span>Curso d&apos;água: {item.curso_agua}</span>}
+                        {item.uso && <span>Uso: {item.uso}</span>}
                         {item.coordenadas && (
                           <span className="font-mono">Coord.: {item.coordenadas}</span>
                         )}
@@ -414,6 +428,7 @@ export const SolicitacoesVistoriaModule: React.FC = () => {
                       </div>
                       <textarea
                         rows={3}
+                        minLength={SOLICITACAO_RELATO_MIN_LENGTH}
                         maxLength={SOLICITACAO_RELATO_MAX_LENGTH}
                         className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500"
                         value={editRelato}
@@ -454,7 +469,7 @@ export const SolicitacoesVistoriaModule: React.FC = () => {
                       </p>
                       <input
                         className="w-full px-3.5 py-2 rounded-xl border border-red-200 bg-white text-sm text-slate-800 outline-none"
-                        maxLength={500}
+                        maxLength={SOLICITACAO_MOTIVO_MAX_LENGTH}
                         placeholder="Motivo do cancelamento (opcional, sem CPF/CNPJ)"
                         value={cancelMotivo}
                         onChange={(e) => setCancelMotivo(e.target.value)}
@@ -572,9 +587,9 @@ export const SolicitacoesVistoriaModule: React.FC = () => {
                     </div>
                   )}
 
-                  {isCancelada && item.motivo_cancelamento && (
+                  {isCancelada && item.motivo && (
                     <div className="text-xs text-slate-500 italic">
-                      Motivo do cancelamento: {item.motivo_cancelamento}
+                      Motivo do cancelamento: {item.motivo}
                     </div>
                   )}
 

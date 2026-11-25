@@ -15,6 +15,7 @@ import {
   formatGmsInput,
   normalizeCoordinateToGMS,
 } from '../../src/utils/coordinateUtils';
+import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../../src/config/integrationArchitecture';
 
 const MiniMap: React.FC<{ lat: string; long: string }> = ({ lat, long }) => {
   const mapRef = useRef<HTMLDivElement>(null);
@@ -259,22 +260,28 @@ const BarramentoForm: React.FC<BarramentoFormProps> = ({
           </div>
         )}
 
-        {!readOnly && !effectiveBarragemId && hasManualDamData && onRegisterBarragem && (
+        {!readOnly && !effectiveBarragemId && hasManualDamData && (
           <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900">
-            <span>Barragem preenchida manualmente sem vínculo no Administra.</span>
-            <button
-              type="button"
-              disabled={isRegisteringHere}
-              onClick={() => void onRegisterBarragem(isMain, idx, data)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm disabled:opacity-60"
-            >
-              {isRegisteringHere ? (
-                <Loader2 size={13} className="animate-spin" />
-              ) : (
-                <Database size={13} />
-              )}
-              Cadastrar Barragem na base de dados
-            </button>
+            <span>
+              {CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked
+                ? 'Barragem preenchida manualmente sem vínculo no Administra. Gravação direta bloqueada até a aprovação da API híbrida.'
+                : 'Barragem preenchida manualmente sem vínculo no Administra.'}
+            </span>
+            {!CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked && onRegisterBarragem && (
+              <button
+                type="button"
+                disabled={isRegisteringHere}
+                onClick={() => void onRegisterBarragem(isMain, idx, data)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm disabled:opacity-60"
+              >
+                {isRegisteringHere ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Database size={13} />
+                )}
+                Cadastrar Barragem na base de dados
+              </button>
+            )}
           </div>
         )}
 

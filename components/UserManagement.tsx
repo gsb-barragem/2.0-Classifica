@@ -1,7 +1,7 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../src/supabaseClient';
 import { AuthContext } from '../src/contexts/AuthContext';
-import { UserRole } from '../types';
+import { User, UserRole } from '../types';
 import { logActivity } from '../src/lib/auditService';
 import ConfirmModal from './ui/ConfirmModal';
 import {
@@ -20,7 +20,6 @@ import {
   BadgeCheck,
   Clock3,
   RefreshCw,
-  Trash2,
   UserX,
   UserCheck,
   RotateCcw,
@@ -92,15 +91,84 @@ const emptyProfile: FormProfile = {
 const inputClass =
   'w-full px-4 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500';
 
-export const UserManagement: React.FC = () => {
+export interface UserManagementProps {
+  initialTab?: 'requests' | 'users';
+  initialUsers?: AppUser[];
+  initialRequests?: AccessRequest[];
+  initialLoading?: boolean;
+}
+
+export function isSelfUserAccount(
+  targetUser: Pick<AppUser, 'id' | 'auth_user_id'>,
+  currentUser: Pick<User, 'id' | 'authUserId'> | null | undefined
+): boolean {
+  if (!currentUser) return false;
+  if (targetUser.id === currentUser.id) return true;
+  if (
+    targetUser.auth_user_id &&
+    currentUser.authUserId &&
+    targetUser.auth_user_id === currentUser.authUserId
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export async function toggleUserActiveStatus(
+  targetUser: AppUser,
+  currentUser: User | null | undefined,
+  deps: {
+    rpc: (
+      fn: 'classifica_toggle_user_status',
+      args: { p_user_id: string }
+    ) => Promise<{ error: unknown }>;
+    log: (
+      action: 'USER_INACTIVATED' | 'USER_ACTIVATED',
+      metadata: { userId: string }
+    ) => Promise<unknown>;
+  }
+): Promise<{ ok: boolean; errorMessage?: string; nextActive?: boolean }> {
+  if (currentUser?.role !== 'Administrador') {
+    return {
+      ok: false,
+      errorMessage: 'Apenas administradores podem alterar o status do usuário.',
+    };
+  }
+  if (isSelfUserAccount(targetUser, currentUser)) {
+    return {
+      ok: false,
+      errorMessage: 'Você não pode inativar sua própria conta.',
+    };
+  }
+  const { error: rpcError } = await deps.rpc('classifica_toggle_user_status', {
+    p_user_id: targetUser.id,
+  });
+  if (rpcError) {
+    return {
+      ok: false,
+      errorMessage: 'Erro ao alterar status do usuário.',
+    };
+  }
+  await deps.log(targetUser.active ? 'USER_INACTIVATED' : 'USER_ACTIVATED', {
+    userId: targetUser.id,
+  });
+  return { ok: true, nextActive: !targetUser.active };
+}
+
+export const UserManagement: React.FC<UserManagementProps> = ({
+  initialTab = 'requests',
+  initialUsers = [],
+  initialRequests = [],
+  initialLoading = true,
+}) => {
   const { currentUser } = useContext(AuthContext);
-  const [users, setUsers] = useState<AppUser[]>([]);
-  const [requests, setRequests] = useState<AccessRequest[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState<AppUser[]>(initialUsers);
+  const [requests, setRequests] = useState<AccessRequest[]>(initialRequests);
+  const [loading, setLoading] = useState(initialLoading);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'requests' | 'users'>('requests');
+  const [tab, setTab] = useState<'requests' | 'users'>(initialTab);
   const [requestEdit, setRequestEdit] = useState<AccessRequest | null>(null);
   const [userEdit, setUserEdit] = useState<AppUser | null>(null);
   const [addingUser, setAddingUser] = useState(false);
@@ -273,7 +341,15 @@ export const UserManagement: React.FC = () => {
 
   const saveUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentUser?.role !== 'Administrador') {
+      setError('Apenas administradores podem atualizar perfis.');
+      return;
+    }
     if (!userEdit) return;
+    if (isSelfUserAccount(userEdit, currentUser) && !form.active) {
+      setError('Você não pode inativar sua própria conta.');
+      return;
+    }
     if (!form.name.trim() || !form.matricula.trim() || !SECTORS.includes(form.setor) || !PERFILS.includes(form.perfil)) {
       setError('Nome, matrícula, setor e perfil são obrigatórios.');
       return;
@@ -337,48 +413,25 @@ export const UserManagement: React.FC = () => {
     });
   };
 
-  const handleDeleteUser = (u: AppUser) => {
-    if (u.id === currentUser?.id) {
-      toast.error('Você não pode excluir o próprio usuário conectado.');
+  const handleToggleActive = async (u: AppUser) => {
+    if (currentUser?.role !== 'Administrador') {
+      toast.error('Apenas administradores podem alterar o status do usuário.');
       return;
     }
-    setConfirmState({
-      isOpen: true,
-      title: 'Excluir Usuário Permanentemente',
-      message: `ATENÇÃO: Deseja excluir permanentemente o usuário ${u.name}? Esta ação remove o acesso e não pode ser desfeita.`,
-      variant: 'danger',
-      onConfirm: async () => {
-        setConfirmState((prev) => ({ ...prev, isOpen: false }));
-        setBusy(true);
-        try {
-          const { error: rpcError } = await supabase.rpc('classifica_delete_user', {
-            p_user_id: u.id,
-          });
-          if (rpcError) throw rpcError;
-          await logActivity('USER_DELETED', { userId: u.id });
-          toast.success('Usuário excluído permanentemente.');
-          await fetchAll();
-        } catch {
-          toast.error('Erro ao excluir usuário. Verifique se ele possui documentos vinculados (recomendado inativar neste caso).');
-        } finally {
-          setBusy(false);
-        }
-      },
-    });
-  };
-
-  const handleToggleActive = async (u: AppUser) => {
-    if (u.id === currentUser?.id) {
+    if (isSelfUserAccount(u, currentUser)) {
       toast.error('Você não pode inativar sua própria conta.');
       return;
     }
     setBusy(true);
     try {
-      const { error: rpcError } = await supabase.rpc('classifica_toggle_user_status', {
-        p_user_id: u.id,
+      const result = await toggleUserActiveStatus(u, currentUser, {
+        rpc: async (fn, args) => await supabase.rpc(fn, args),
+        log: (action, metadata) => logActivity(action, metadata),
       });
-      if (rpcError) throw rpcError;
-      await logActivity(u.active ? 'USER_INACTIVATED' : 'USER_ACTIVATED', { userId: u.id });
+      if (!result.ok) {
+        toast.error(result.errorMessage || 'Erro ao alterar status do usuário.');
+        return;
+      }
       toast.success(u.active ? 'Usuário inativado.' : 'Usuário ativado.');
       await fetchAll();
     } catch {
@@ -672,21 +725,21 @@ export const UserManagement: React.FC = () => {
                         </button>
                         <button
                           onClick={() => handleToggleActive(u)}
-                          className={`p-2 rounded-lg ${
+                          disabled={busy || isSelfUserAccount(u, currentUser)}
+                          className={`p-2 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed ${
                             u.active
                               ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50'
                               : 'text-emerald-600 hover:bg-emerald-50'
                           }`}
-                          title={u.active ? 'Inativar usuário' : 'Ativar usuário'}
+                          title={
+                            isSelfUserAccount(u, currentUser)
+                              ? 'Você não pode inativar sua própria conta'
+                              : u.active
+                              ? 'Inativar usuário'
+                              : 'Ativar usuário'
+                          }
                         >
                           {u.active ? <UserX size={16} /> : <UserCheck size={16} />}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteUser(u)}
-                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                          title="Excluir permanentemente"
-                        >
-                          <Trash2 size={16} />
                         </button>
                       </div>
                     </td>
@@ -810,6 +863,7 @@ export const UserManagement: React.FC = () => {
                     <input
                       type="checkbox"
                       checked={form.active}
+                      disabled={Boolean(userEdit && isSelfUserAccount(userEdit, currentUser))}
                       onChange={(e) => setForm({ ...form, active: e.target.checked })}
                     />
                     Usuário ativo

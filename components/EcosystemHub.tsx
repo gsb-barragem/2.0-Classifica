@@ -1428,11 +1428,14 @@ export const EcosystemHub: React.FC = () => {
                         pickField(bar, [/^empreendedor_nome$/i, /^razao_social$/i, /^empreendedor$/i]);
 
                       setVistoriaPrefill({
+                        origem_ref_id:
+                          detailModal.damProducts?.find((prod) => prod.id)?.id || null,
                         barragem_id: pickField(bar, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]),
                         barragem_nome: getBarragemLabel(bar),
                         municipio: pickField(bar, [/^municipio$/i, /^cidade$/i]),
                         curso_agua: pickField(bar, [/^curso_agua$/i, /^curso_d_agua$/i, /^rio$/i, /^hidrografia$/i]),
                         coordenadas: coordStr,
+                        uso: pickField(bar, [/^uso$/i, /^finalidade$/i, /^uso_principal$/i]),
                         empreendedor_id: empId,
                         empreendedor_nome: empName,
                         processo:

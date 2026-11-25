@@ -740,12 +740,18 @@ const ParecerList: React.FC<ParecerListProps> = ({
                                                             const latGms = normalizeCoordinateToGMS(p.barragemPrincipal?.lat);
                                                             const longGms = normalizeCoordinateToGMS(p.barragemPrincipal?.long);
                                                             const coords = [latGms, longGms].filter(Boolean).join(' / ') || p.coordenadas || null;
+                                                            const uso =
+                                                                p.finalidade === 'Outro'
+                                                                    ? (p.finalidadeOutro || null)
+                                                                    : (p.finalidade || null);
                                                             setVistoriaPrefill({
+                                                                origem_ref_id: p.id || null,
                                                                 barragem_id: p.barragemId || p.barragemPrincipal?.barragemId || null,
                                                                 barragem_nome: p.barragemPrincipal?.nome || null,
                                                                 municipio: p.municipio || null,
                                                                 curso_agua: p.cursoAgua || null,
                                                                 coordenadas: coords,
+                                                                uso,
                                                                 empreendedor_id: p.empreendedorId || null,
                                                                 empreendedor_nome: p.razaoSocial || p.interessado || null,
                                                                 processo: p.protocolo || p.sistemaInformacoes?.processo || null,

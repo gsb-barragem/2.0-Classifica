@@ -1,5 +1,4 @@
-
-import express from 'express';
+import express, { type RequestHandler } from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +9,7 @@ import administraLeituraHandler from './api/administra-leitura.ts';
 import administraEscritaHandler from './api/administra-escrita.ts';
 import pendenciasHandler from './api/pendencias.ts';
 import solicitacoesVistoriaHandler from './api/solicitacoes-vistoria.ts';
+import administraS2sHealthHandler from './api/administra-s2s-health.ts';
 
 dotenv.config();
 
@@ -19,37 +19,58 @@ const { values } = parseArgs({
   strict: false,
 });
 
-async function startServer() {
+export interface ApiAppHandlers {
+  administraLeitura?: RequestHandler;
+  administraEscrita?: RequestHandler;
+  pendencias?: RequestHandler;
+  solicitacoesVistoria?: RequestHandler;
+  administraS2sHealth?: RequestHandler;
+}
+
+export function createApiApp(handlers: ApiAppHandlers = {}) {
   const app = express();
-  const parsedPort = Number(values.port || process.env.PORT || 3000);
-  if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
-    throw new Error('A porta configurada não é válida.');
-  }
-  const host = typeof values.host === 'string' ? values.host : (process.env.HOST || '0.0.0.0');
-  const distPath = path.join(root, 'dist');
   const isProduction = process.env.NODE_ENV === 'production';
 
   app.disable('x-powered-by');
-  app.use(helmet({
-    contentSecurityPolicy: isProduction
-      ? {
-          directives: {
-            ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-            "script-src": ["'self'"],
-            "img-src": ["'self'", 'data:', 'https://lh3.googleusercontent.com', 'https://server.arcgisonline.com', 'https://*.tile.openstreetmap.org'],
-            "connect-src": ["'self'", 'https://*.supabase.co', 'wss://*.supabase.co', 'https://servicodados.ibge.gov.br'],
-            "style-src": ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://unpkg.com'],
-            "font-src": ["'self'", 'https://fonts.gstatic.com'],
-          },
-        }
-      : false,
-    crossOriginEmbedderPolicy: false,
-    referrerPolicy: { policy: 'no-referrer' },
-  }));
+  app.use(
+    helmet({
+      contentSecurityPolicy: isProduction
+        ? {
+            directives: {
+              ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+              "script-src": ["'self'"],
+              "img-src": [
+                "'self'",
+                'data:',
+                'https://lh3.googleusercontent.com',
+                'https://server.arcgisonline.com',
+                'https://*.tile.openstreetmap.org',
+              ],
+              "connect-src": [
+                "'self'",
+                'https://*.supabase.co',
+                'wss://*.supabase.co',
+                'https://servicodados.ibge.gov.br',
+              ],
+              "style-src": [
+                "'self'",
+                "'unsafe-inline'",
+                'https://fonts.googleapis.com',
+                'https://unpkg.com',
+              ],
+              "font-src": ["'self'", 'https://fonts.gstatic.com'],
+            },
+          }
+        : false,
+      crossOriginEmbedderPolicy: false,
+      referrerPolicy: { policy: 'no-referrer' },
+    })
+  );
   app.use(express.json({ limit: '1mb' }));
   app.use((_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
     res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
     if (isProduction) {
@@ -58,33 +79,39 @@ async function startServer() {
     next();
   });
 
-  app.all('/api/administra-leitura', (req, res) => {
-    void administraLeituraHandler(req, res);
-  });
+  const handleLeitura =
+    handlers.administraLeitura ?? ((req, res) => void administraLeituraHandler(req, res));
+  const handleEscrita =
+    handlers.administraEscrita ?? ((req, res) => void administraEscritaHandler(req, res));
+  const handlePendencias =
+    handlers.pendencias ?? ((req, res) => void pendenciasHandler(req, res));
+  const handleVistoria =
+    handlers.solicitacoesVistoria ?? ((req, res) => void solicitacoesVistoriaHandler(req, res));
+  const handleS2sHealth =
+    handlers.administraS2sHealth ?? ((req, res) => void administraS2sHealthHandler(req, res));
 
-  app.all('/api/administra-escrita', (req, res) => {
-    void administraEscritaHandler(req, res);
-  });
+  app.all('/api/administra-leitura', handleLeitura);
+  app.all('/api/administra-escrita', handleEscrita);
+  app.all('/api/pendencias', handlePendencias);
+  app.all('/api/solicitacoes-vistoria', handleVistoria);
+  app.all('/api/solicitacoes-vistoria/:id', handleVistoria);
+  app.all('/api/solicitacoes-vistoria/:id/observacao', handleVistoria);
+  app.all('/api/solicitacoes-vistoria/:id/cancelar', handleVistoria);
+  app.all('/api/administra-s2s-health', handleS2sHealth);
 
-  app.all('/api/pendencias', (req, res) => {
-    void pendenciasHandler(req, res);
-  });
+  return app;
+}
 
-  app.all('/api/solicitacoes-vistoria', (req, res) => {
-    void solicitacoesVistoriaHandler(req, res);
-  });
+async function startServer() {
+  const parsedPort = Number(values.port || process.env.PORT || 3000);
+  if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+    throw new Error('A porta configurada não é válida.');
+  }
+  const host = typeof values.host === 'string' ? values.host : process.env.HOST || '0.0.0.0';
+  const distPath = path.join(root, 'dist');
+  const isProduction = process.env.NODE_ENV === 'production';
 
-  app.all('/api/solicitacoes-vistoria/:id', (req, res) => {
-    void solicitacoesVistoriaHandler(req, res);
-  });
-
-  app.all('/api/solicitacoes-vistoria/:id/observacao', (req, res) => {
-    void solicitacoesVistoriaHandler(req, res);
-  });
-
-  app.all('/api/solicitacoes-vistoria/:id/cancelar', (req, res) => {
-    void solicitacoesVistoriaHandler(req, res);
-  });
+  const app = createApiApp();
 
   if (isProduction) {
     if (!fs.existsSync(path.join(distPath, 'index.html'))) {
@@ -103,7 +130,9 @@ async function startServer() {
   }
 
   const server = app.listen(parsedPort, host, () => {
-    console.log(`Classifica 2.0 em http://${host}:${parsedPort} (${isProduction ? 'produção' : 'desenvolvimento'})`);
+    console.log(
+      `Classifica 2.0 em http://${host}:${parsedPort} (${isProduction ? 'produção' : 'desenvolvimento'})`
+    );
   });
 
   const shutdown = () => server.close(() => process.exit(0));
@@ -111,7 +140,16 @@ async function startServer() {
   process.once('SIGINT', shutdown);
 }
 
-startServer().catch((error) => {
-  console.error('Não foi possível iniciar o Classifica 2.0:', error instanceof Error ? error.message : 'erro inesperado');
-  process.exitCode = 1;
-});
+const isDirectExecution =
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isDirectExecution) {
+  startServer().catch((error) => {
+    console.error(
+      'Não foi possível iniciar o Classifica 2.0:',
+      error instanceof Error ? error.message : 'erro inesperado'
+    );
+    process.exitCode = 1;
+  });
+}

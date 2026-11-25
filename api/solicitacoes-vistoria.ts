@@ -19,6 +19,7 @@ export interface EquipeMembroSafe {
 export interface SolicitacaoVistoriaSafe {
   id: string;
   sistema_origem: 'classifica';
+  origem_ref_id: string | null;
   status: string;
   relato: string;
   barragem_id: string | null;
@@ -26,6 +27,7 @@ export interface SolicitacaoVistoriaSafe {
   municipio: string | null;
   curso_agua: string | null;
   coordenadas: string | null;
+  uso: string | null;
   empreendedor_id: string | null;
   empreendedor_nome: string | null;
   processo: string | null;
@@ -39,7 +41,7 @@ export interface SolicitacaoVistoriaSafe {
   data_realizacao: string | null;
   equipe: Array<EquipeMembroSafe | string>;
   observacao_campo: string | null;
-  motivo_cancelamento: string | null;
+  motivo: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -61,14 +63,30 @@ export interface SolicitacoesVistoriaDeps {
   getConfig?: () => { baseUrl: string; serviceToken: string } | null;
 }
 
+const MIN_RELATO_LENGTH = 3;
 const MAX_RELATO_LENGTH = 1000;
 const MAX_OBSERVACAO_LENGTH = 1000;
+const MAX_DADOS_PRE_FIELD_LENGTH = 300;
+const MAX_ORIGEM_REF_ID_LENGTH = 120;
+const MAX_MOTIVO_LENGTH = 500;
+
 const ALLOWED_STATUS_FILTER = new Set([
+  'solicitada',
   'pendente',
   'aberta',
   'em_planejamento',
   'realizada',
   'cancelada',
+]);
+
+const ALLOWED_DADOS_PRE_KEYS = new Set([
+  'nome_barragem',
+  'municipio',
+  'curso_agua',
+  'coordenadas',
+  'uso',
+  'classificacao',
+  'nome_empreendedor',
 ]);
 
 const FORMATTED_CPF_REGEX = /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/;
@@ -258,6 +276,27 @@ function cleanOptionalField(
   return { ok: true, value: trimmed };
 }
 
+function buildRelatoWithDpaCri(
+  baseRelato: string,
+  dpa: string | null,
+  cri: string | null
+): string {
+  const parts: string[] = [];
+  if (dpa) parts.push(`DPA: ${dpa}`);
+  if (cri) parts.push(`CRI: ${cri}`);
+  if (parts.length === 0) return baseRelato;
+
+  const suffix = parts.join(' | ');
+  if (baseRelato.includes(suffix)) return baseRelato;
+
+  const fullSuffix = `\n${suffix}`;
+  if (baseRelato.length + fullSuffix.length <= MAX_RELATO_LENGTH) {
+    return `${baseRelato}${fullSuffix}`;
+  }
+  const maxBase = Math.max(MIN_RELATO_LENGTH, MAX_RELATO_LENGTH - fullSuffix.length);
+  return `${baseRelato.slice(0, maxBase).trimEnd()}${fullSuffix}`;
+}
+
 function sanitizeOptionalOutText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -293,26 +332,33 @@ export function sanitizeSolicitacao(raw: unknown): SolicitacaoVistoriaSafe | nul
   const id = typeof r.id === 'string' || typeof r.id === 'number' ? String(r.id).trim() : '';
   if (!id) return null;
 
-  const sistemaOrigem =
-    typeof r.sistema_origem === 'string' ? r.sistema_origem.trim().toLowerCase() : '';
-  if (sistemaOrigem !== 'classifica') {
+  if (r.sistema_origem !== 'classifica') {
     return null;
   }
+
+  const pre =
+    r.dados_pre_preenchidos &&
+    typeof r.dados_pre_preenchidos === 'object' &&
+    !Array.isArray(r.dados_pre_preenchidos)
+      ? (r.dados_pre_preenchidos as Record<string, unknown>)
+      : null;
 
   return {
     id,
     sistema_origem: 'classifica',
-    status: sanitizeOptionalOutText(r.status) || 'pendente',
+    origem_ref_id: sanitizeOptionalOutText(r.origem_ref_id),
+    status: sanitizeOptionalOutText(r.status) || 'solicitada',
     relato: sanitizeOptionalOutText(r.relato) || '',
     barragem_id: sanitizeOptionalOutText(r.barragem_id),
-    barragem_nome: sanitizeOptionalOutText(r.barragem_nome),
-    municipio: sanitizeOptionalOutText(r.municipio),
-    curso_agua: sanitizeOptionalOutText(r.curso_agua),
-    coordenadas: sanitizeOptionalOutText(r.coordenadas),
+    barragem_nome: sanitizeOptionalOutText(pre?.nome_barragem ?? r.barragem_nome),
+    municipio: sanitizeOptionalOutText(pre?.municipio ?? r.municipio),
+    curso_agua: sanitizeOptionalOutText(pre?.curso_agua ?? r.curso_agua),
+    coordenadas: sanitizeOptionalOutText(pre?.coordenadas ?? r.coordenadas),
+    uso: sanitizeOptionalOutText(pre?.uso ?? r.uso),
     empreendedor_id: sanitizeOptionalOutText(r.empreendedor_id),
-    empreendedor_nome: sanitizeOptionalOutText(r.empreendedor_nome),
-    processo: sanitizeOptionalOutText(r.processo),
-    classificacao_atual: sanitizeOptionalOutText(r.classificacao_atual),
+    empreendedor_nome: sanitizeOptionalOutText(pre?.nome_empreendedor ?? r.empreendedor_nome),
+    processo: sanitizeOptionalOutText(r.processo_referencia ?? r.processo),
+    classificacao_atual: sanitizeOptionalOutText(pre?.classificacao ?? r.classificacao_atual),
     dpa: sanitizeOptionalOutText(r.dpa),
     cri: sanitizeOptionalOutText(r.cri),
     solicitante_id: sanitizeOptionalOutText(r.solicitante_id),
@@ -322,7 +368,7 @@ export function sanitizeSolicitacao(raw: unknown): SolicitacaoVistoriaSafe | nul
     data_realizacao: sanitizeOptionalOutText(r.data_realizacao ?? r.data_conclusao),
     equipe: sanitizeEquipe(r.equipe),
     observacao_campo: sanitizeOptionalOutText(r.observacao_campo),
-    motivo_cancelamento: sanitizeOptionalOutText(r.motivo_cancelamento),
+    motivo: sanitizeOptionalOutText(r.motivo),
     created_at: sanitizeOptionalOutText(r.created_at),
     updated_at: sanitizeOptionalOutText(r.updated_at),
   };
@@ -571,6 +617,7 @@ async function callCentralApi(
   fetchImpl: typeof fetch,
   url: string,
   serviceToken: string,
+  userToken: string,
   init?: RequestInit
 ): Promise<{
   ok: boolean;
@@ -584,7 +631,9 @@ async function callCentralApi(
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
-        Authorization: `Bearer ${serviceToken}`,
+        Authorization: `Bearer ${userToken}`,
+        'x-solicitacoes-service-token': serviceToken,
+        'x-sistema-origem': 'classifica',
         ...(init?.headers || {}),
       },
     });
@@ -611,8 +660,9 @@ async function callCentralApi(
   }
 }
 
-function rejectAnyCpfCnpjInBody(body: Record<string, unknown>): string | null {
-  for (const [key, val] of Object.entries(body)) {
+function rejectAnyCpfCnpjInValue(obj: Record<string, unknown>, depth = 0): string | null {
+  if (depth > 4) return null;
+  for (const [key, val] of Object.entries(obj)) {
     const lowerKey = key.toLowerCase();
     if (lowerKey === 'cpf' || lowerKey === 'cnpj' || lowerKey === 'cpf_cnpj' || lowerKey === 'cpfcnpj') {
       if (val !== null && val !== undefined && String(val).trim() !== '') {
@@ -621,6 +671,16 @@ function rejectAnyCpfCnpjInBody(body: Record<string, unknown>): string | null {
     }
     if (typeof val === 'string' && containsCpfOrCnpj(val)) {
       return `O campo "${key}" não pode conter CPF ou CNPJ.`;
+    }
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      const nested = rejectAnyCpfCnpjInValue(val as Record<string, unknown>, depth + 1);
+      if (nested) return nested;
+    } else if (Array.isArray(val)) {
+      for (const item of val) {
+        if (typeof item === 'string' && containsCpfOrCnpj(item)) {
+          return `O campo "${key}" não pode conter CPF ou CNPJ.`;
+        }
+      }
     }
   }
   return null;
@@ -646,10 +706,8 @@ export function createSolicitacoesVistoriaHandler(
     }
 
     const authHeader = req.headers.authorization;
-    const token =
-      typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
-        ? authHeader.slice(7).trim()
-        : '';
+    const bearerMatch = typeof authHeader === 'string' ? authHeader.match(/^Bearer\s+(.+)$/i) : null;
+    const token = bearerMatch ? bearerMatch[1].trim() : '';
 
     if (!token) {
       sendJson(res, 401, {
@@ -721,7 +779,7 @@ export function createSolicitacoesVistoriaHandler(
         ? `${config.baseUrl}/${encodeURIComponent(route.id)}?sistema_origem=classifica`
         : `${config.baseUrl}?${qs.toString()}`;
 
-      const upstream = await callCentralApi(fetchImpl, targetUrl, config.serviceToken, {
+      const upstream = await callCentralApi(fetchImpl, targetUrl, config.serviceToken, token, {
         method: 'GET',
       });
 
@@ -736,7 +794,7 @@ export function createSolicitacoesVistoriaHandler(
       }
 
       if (route.id) {
-        const rawItem = upstream.data?.item ?? upstream.data?.solicitacao ?? upstream.data;
+        const rawItem = upstream.data?.solicitacao ?? upstream.data?.item ?? upstream.data;
         const item = sanitizeSolicitacao(rawItem);
         if (!item) {
           sendJson(res, 404, {
@@ -750,10 +808,10 @@ export function createSolicitacoesVistoriaHandler(
         return;
       }
 
-      const rawList = Array.isArray(upstream.data?.items)
-        ? upstream.data.items
-        : Array.isArray(upstream.data?.solicitacoes)
+      const rawList = Array.isArray(upstream.data?.solicitacoes)
         ? upstream.data.solicitacoes
+        : Array.isArray(upstream.data?.items)
+        ? upstream.data.items
         : Array.isArray(upstream.data?.data)
         ? upstream.data.data
         : Array.isArray(upstream.data)
@@ -801,7 +859,7 @@ export function createSolicitacoesVistoriaHandler(
       return;
     }
 
-    const cpfCnpjViolation = rejectAnyCpfCnpjInBody(body);
+    const cpfCnpjViolation = rejectAnyCpfCnpjInValue(body);
     if (cpfCnpjViolation) {
       sendJson(res, 400, {
         ok: false,
@@ -828,12 +886,30 @@ export function createSolicitacoesVistoriaHandler(
           sendJson(res, 400, { ok: false, code: 'INVALID_RELATO', error: relatoCheck.error });
           return;
         }
-        if (!relatoCheck.value) {
+        if (!relatoCheck.value || relatoCheck.value.length < MIN_RELATO_LENGTH) {
           sendJson(res, 400, {
             ok: false,
-            code: 'MISSING_RELATO',
-            error: 'O campo relato é obrigatório.',
+            code: 'INVALID_RELATO',
+            error: relatoCheck.value
+              ? `O relato deve ter pelo menos ${MIN_RELATO_LENGTH} caracteres.`
+              : 'O campo relato é obrigatório.',
           });
+          return;
+        }
+
+        const origemRefCheck = cleanOptionalField(
+          body.origem_ref_id,
+          'ID de referência de origem',
+          MAX_ORIGEM_REF_ID_LENGTH
+        );
+        if (origemRefCheck.ok === false) {
+          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: origemRefCheck.error });
+          return;
+        }
+
+        const empIdCheck = cleanOptionalField(body.empreendedor_id, 'ID do empreendedor', 120);
+        if (empIdCheck.ok === false) {
+          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: empIdCheck.error });
           return;
         }
 
@@ -842,50 +918,17 @@ export function createSolicitacoesVistoriaHandler(
           sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: barragemIdCheck.error });
           return;
         }
-        const barragemNomeCheck = cleanOptionalField(body.barragem_nome, 'Nome da barragem', 200);
-        if (barragemNomeCheck.ok === false) {
-          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: barragemNomeCheck.error });
-          return;
-        }
-        const municipioCheck = cleanOptionalField(body.municipio, 'Município', 120);
-        if (municipioCheck.ok === false) {
-          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: municipioCheck.error });
-          return;
-        }
-        const cursoAguaCheck = cleanOptionalField(body.curso_agua, "Curso d'água", 160);
-        if (cursoAguaCheck.ok === false) {
-          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: cursoAguaCheck.error });
-          return;
-        }
-        const coordCheck = cleanOptionalField(body.coordenadas, 'Coordenadas', 120);
-        if (coordCheck.ok === false) {
-          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: coordCheck.error });
-          return;
-        }
-        const empIdCheck = cleanOptionalField(body.empreendedor_id, 'ID do empreendedor', 120);
-        if (empIdCheck.ok === false) {
-          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: empIdCheck.error });
-          return;
-        }
-        const empNomeCheck = cleanOptionalField(body.empreendedor_nome, 'Nome do empreendedor', 200);
-        if (empNomeCheck.ok === false) {
-          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: empNomeCheck.error });
-          return;
-        }
-        const processoCheck = cleanOptionalField(body.processo, 'Processo', 120);
-        if (processoCheck.ok === false) {
-          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: processoCheck.error });
-          return;
-        }
-        const classAtualCheck = cleanOptionalField(
-          body.classificacao_atual,
-          'Classificação atual',
-          160
+
+        const processoRefCheck = cleanOptionalField(
+          body.processo_referencia ?? body.processo,
+          'Processo de referência',
+          120
         );
-        if (classAtualCheck.ok === false) {
-          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: classAtualCheck.error });
+        if (processoRefCheck.ok === false) {
+          sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: processoRefCheck.error });
           return;
         }
+
         const dpaCheck = cleanOptionalField(body.dpa, 'DPA', 60);
         if (dpaCheck.ok === false) {
           sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: dpaCheck.error });
@@ -897,30 +940,92 @@ export function createSolicitacoesVistoriaHandler(
           return;
         }
 
-        // Identidade do solicitante e sistema_origem vêm SEMPRE da sessão verificada no servidor
+        let preIn: Record<string, unknown> = {};
+        if (body.dados_pre_preenchidos !== undefined && body.dados_pre_preenchidos !== null) {
+          if (
+            typeof body.dados_pre_preenchidos !== 'object' ||
+            Array.isArray(body.dados_pre_preenchidos)
+          ) {
+            sendJson(res, 400, {
+              ok: false,
+              code: 'INVALID_DADOS_PRE_PREENCHIDOS',
+              error: 'dados_pre_preenchidos deve ser um objeto válido.',
+            });
+            return;
+          }
+          preIn = body.dados_pre_preenchidos as Record<string, unknown>;
+          for (const [k, v] of Object.entries(preIn)) {
+            if (!ALLOWED_DADOS_PRE_KEYS.has(k)) {
+              sendJson(res, 400, {
+                ok: false,
+                code: 'INVALID_DADOS_PRE_PREENCHIDOS',
+                error: `Campo "${k}" não permitido em dados_pre_preenchidos.`,
+              });
+              return;
+            }
+            if (v !== undefined && v !== null && typeof v !== 'string') {
+              sendJson(res, 400, {
+                ok: false,
+                code: 'INVALID_DADOS_PRE_PREENCHIDOS',
+                error: `O campo "${k}" de dados_pre_preenchidos deve ser texto.`,
+              });
+              return;
+            }
+          }
+        }
+
+        const dadosPreMappings: Array<[string, string, unknown]> = [
+          ['nome_barragem', 'Nome da barragem', preIn.nome_barragem ?? body.barragem_nome],
+          ['municipio', 'Município', preIn.municipio ?? body.municipio],
+          ['curso_agua', "Curso d'água", preIn.curso_agua ?? body.curso_agua],
+          ['coordenadas', 'Coordenadas', preIn.coordenadas ?? body.coordenadas],
+          ['uso', 'Uso', preIn.uso ?? body.uso],
+          ['classificacao', 'Classificação atual', preIn.classificacao ?? body.classificacao_atual],
+          [
+            'nome_empreendedor',
+            'Nome do empreendedor',
+            preIn.nome_empreendedor ?? body.empreendedor_nome,
+          ],
+        ];
+
+        const dadosPrePreenchidos: Record<string, string> = {};
+        for (const [key, label, rawVal] of dadosPreMappings) {
+          const checked = cleanOptionalField(rawVal, label, MAX_DADOS_PRE_FIELD_LENGTH);
+          if (checked.ok === false) {
+            sendJson(res, 400, { ok: false, code: 'INVALID_INPUT', error: checked.error });
+            return;
+          }
+          if (checked.value) {
+            dadosPrePreenchidos[key] = checked.value;
+          }
+        }
+
+        const finalRelato = buildRelatoWithDpaCri(
+          relatoCheck.value,
+          dpaCheck.value,
+          criCheck.value
+        );
+
+        // Contrato real do Administra (CRIAÇÃO): enviar SOMENTE estas 6 chaves
         const createPayload = {
-          sistema_origem: 'classifica' as const,
-          solicitante_id: actor.canonicalUserId,
-          solicitante_nome: actor.name,
-          solicitante_email: actor.email || null,
-          relato: relatoCheck.value,
-          barragem_id: barragemIdCheck.value,
-          barragem_nome: barragemNomeCheck.value,
-          municipio: municipioCheck.value,
-          curso_agua: cursoAguaCheck.value,
-          coordenadas: coordCheck.value,
+          relato: finalRelato,
+          origem_ref_id: origemRefCheck.value,
           empreendedor_id: empIdCheck.value,
-          empreendedor_nome: empNomeCheck.value,
-          processo: processoCheck.value,
-          classificacao_atual: classAtualCheck.value,
-          dpa: dpaCheck.value,
-          cri: criCheck.value,
+          barragem_id: barragemIdCheck.value,
+          processo_referencia: processoRefCheck.value,
+          dados_pre_preenchidos: dadosPrePreenchidos,
         };
 
-        const upstream = await callCentralApi(fetchImpl, config.baseUrl, config.serviceToken, {
-          method: 'POST',
-          body: JSON.stringify(createPayload),
-        });
+        const upstream = await callCentralApi(
+          fetchImpl,
+          config.baseUrl,
+          config.serviceToken,
+          token,
+          {
+            method: 'POST',
+            body: JSON.stringify(createPayload),
+          }
+        );
 
         if (!upstream.ok) {
           sendJson(res, upstream.status, {
@@ -932,7 +1037,7 @@ export function createSolicitacoesVistoriaHandler(
           return;
         }
 
-        const rawCreated = upstream.data?.item ?? upstream.data?.solicitacao ?? upstream.data;
+        const rawCreated = upstream.data?.solicitacao ?? upstream.data?.item ?? upstream.data;
         const item = sanitizeSolicitacao(rawCreated);
         if (!item) {
           sendJson(res, 502, {
@@ -966,6 +1071,7 @@ export function createSolicitacoesVistoriaHandler(
       fetchImpl,
       `${config.baseUrl}/${encodeURIComponent(targetId)}?sistema_origem=classifica`,
       config.serviceToken,
+      token,
       { method: 'GET' }
     );
 
@@ -980,7 +1086,7 @@ export function createSolicitacoesVistoriaHandler(
     }
 
     const existing = sanitizeSolicitacao(
-      existingRes.data?.item ?? existingRes.data?.solicitacao ?? existingRes.data
+      existingRes.data?.solicitacao ?? existingRes.data?.item ?? existingRes.data
     );
     if (!existing) {
       sendJson(res, 404, {
@@ -1033,15 +1139,16 @@ export function createSolicitacoesVistoriaHandler(
         return;
       }
 
-      // Envia SOMENTE observacao_campo — nunca status, data_realizacao nem campos extras
+      // Envia SOMENTE observacao_campo (string) — nunca status, data_realizacao nem campos extras
       const upstream = await callCentralApi(
         fetchImpl,
         `${config.baseUrl}/${encodeURIComponent(targetId)}/observacao`,
         config.serviceToken,
+        token,
         {
           method: 'PATCH',
           body: JSON.stringify({
-            observacao_campo: obsCheck.value,
+            observacao_campo: obsCheck.value ?? '',
           }),
         }
       );
@@ -1056,7 +1163,7 @@ export function createSolicitacoesVistoriaHandler(
         return;
       }
 
-      const rawUpdated = upstream.data?.item ?? upstream.data?.solicitacao ?? upstream.data;
+      const rawUpdated = upstream.data?.solicitacao ?? upstream.data?.item ?? upstream.data;
       const item = sanitizeSolicitacao(rawUpdated);
       if (!item) {
         sendJson(res, 502, {
@@ -1088,14 +1195,7 @@ export function createSolicitacoesVistoriaHandler(
       return;
     }
 
-    const requestedAcao =
-      route.subAction === 'cancelar' ||
-      body.acao === 'cancelar' ||
-      body.status === 'cancelada'
-        ? 'cancelar'
-        : 'editar';
-
-    if (requestedAcao === 'cancelar') {
+    if (route.subAction === 'cancelar') {
       if (existing.status.toLowerCase() === 'realizada') {
         sendJson(res, 409, {
           ok: false,
@@ -1114,9 +1214,9 @@ export function createSolicitacoesVistoriaHandler(
       }
 
       const motivoCheck = cleanOptionalField(
-        body.motivo_cancelamento,
+        body.motivo ?? body.motivo_cancelamento,
         'Motivo do cancelamento',
-        500
+        MAX_MOTIVO_LENGTH
       );
       if (motivoCheck.ok === false) {
         sendJson(res, 400, { ok: false, code: 'INVALID_MOTIVO', error: motivoCheck.error });
@@ -1125,15 +1225,13 @@ export function createSolicitacoesVistoriaHandler(
 
       const upstream = await callCentralApi(
         fetchImpl,
-        `${config.baseUrl}/${encodeURIComponent(targetId)}`,
+        `${config.baseUrl}/${encodeURIComponent(targetId)}/cancelar`,
         config.serviceToken,
+        token,
         {
           method: 'PATCH',
           body: JSON.stringify({
-            acao: 'cancelar',
-            status: 'cancelada',
-            motivo_cancelamento: motivoCheck.value,
-            atualizado_por_id: actor.canonicalUserId,
+            motivo: motivoCheck.value ?? '',
           }),
         }
       );
@@ -1148,7 +1246,7 @@ export function createSolicitacoesVistoriaHandler(
         return;
       }
 
-      const rawUpdated = upstream.data?.item ?? upstream.data?.solicitacao ?? upstream.data;
+      const rawUpdated = upstream.data?.solicitacao ?? upstream.data?.item ?? upstream.data;
       const item = sanitizeSolicitacao(rawUpdated);
       if (!item) {
         sendJson(res, 502, {
@@ -1164,7 +1262,7 @@ export function createSolicitacoesVistoriaHandler(
       return;
     }
 
-    // Edição pelo autor ou Administrador
+    // Edição pelo autor ou Administrador — PATCH /:id com corpo apenas { relato }
     if (existing.status.toLowerCase() === 'realizada' || existing.status.toLowerCase() === 'cancelada') {
       sendJson(res, 409, {
         ok: false,
@@ -1179,11 +1277,13 @@ export function createSolicitacoesVistoriaHandler(
       sendJson(res, 400, { ok: false, code: 'INVALID_RELATO', error: relatoCheck.error });
       return;
     }
-    if (!relatoCheck.value) {
+    if (!relatoCheck.value || relatoCheck.value.length < MIN_RELATO_LENGTH) {
       sendJson(res, 400, {
         ok: false,
-        code: 'MISSING_RELATO',
-        error: 'O campo relato é obrigatório.',
+        code: 'INVALID_RELATO',
+        error: relatoCheck.value
+          ? `O relato deve ter pelo menos ${MIN_RELATO_LENGTH} caracteres.`
+          : 'O campo relato é obrigatório.',
       });
       return;
     }
@@ -1192,12 +1292,11 @@ export function createSolicitacoesVistoriaHandler(
       fetchImpl,
       `${config.baseUrl}/${encodeURIComponent(targetId)}`,
       config.serviceToken,
+      token,
       {
         method: 'PATCH',
         body: JSON.stringify({
-          acao: 'editar',
           relato: relatoCheck.value,
-          atualizado_por_id: actor.canonicalUserId,
         }),
       }
     );
@@ -1212,7 +1311,7 @@ export function createSolicitacoesVistoriaHandler(
       return;
     }
 
-    const rawUpdated = upstream.data?.item ?? upstream.data?.solicitacao ?? upstream.data;
+    const rawUpdated = upstream.data?.solicitacao ?? upstream.data?.item ?? upstream.data;
     const item = sanitizeSolicitacao(rawUpdated);
     if (!item) {
       sendJson(res, 502, {

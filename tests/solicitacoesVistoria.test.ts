@@ -83,8 +83,11 @@ test('Solicitações de Vistoria API — autenticação obrigatória (401)', asy
   await withServer(
     {
       verifySession: makeVerifySession(),
-      getConfig: () => ({ baseUrl: 'https://administra.example/api/solicitacoes-vistoria', serviceToken: 'svc-secret' }),
-      fetchImpl: async () => new Response(JSON.stringify({ items: [] }), { status: 200 }),
+      getConfig: () => ({
+        baseUrl: 'https://administra.example/api/solicitacoes-vistoria',
+        serviceToken: 'svc-secret',
+      }),
+      fetchImpl: async () => new Response(JSON.stringify({ solicitacoes: [] }), { status: 200 }),
     },
     async (baseUrl) => {
       const noAuth = await fetch(`${baseUrl}/api/solicitacoes-vistoria`);
@@ -98,16 +101,27 @@ test('Solicitações de Vistoria API — autenticação obrigatória (401)', asy
   );
 });
 
-test('Solicitações de Vistoria API — Visualizador lê com allowlist e é bloqueado em mutações (403)', async () => {
+test('Solicitações de Vistoria API — Visualizador lê dados_pre_preenchidos, status solicitada e é bloqueado em mutações (403)', async () => {
   let capturedUpstreamUrl = '';
+  let capturedGetHeaders: Record<string, string> = {};
   const sampleItem = {
     id: 'sol-1',
     sistema_origem: 'classifica',
-    status: 'pendente',
+    origem_ref_id: 'par-100',
+    status: 'solicitada',
     relato: 'Solicita verificação de vertedouro.',
     barragem_id: 'bar-10',
-    barragem_nome: 'Barragem Esperança',
-    municipio: 'Cuiabá',
+    empreendedor_id: 'emp-10',
+    processo_referencia: 'SEMA-PRO-2026/001',
+    dados_pre_preenchidos: {
+      nome_barragem: 'Barragem Esperança',
+      municipio: 'Cuiabá',
+      curso_agua: 'Rio Coxipó',
+      coordenadas: "15°30'00\"S / 56°05'00\"W",
+      uso: 'Irrigação',
+      classificacao: 'Categoria B',
+      nome_empreendedor: 'Empreendimento Esperança Ltda',
+    },
     solicitante_id: 'user-analista-a',
     solicitante_nome: 'Analista A',
     cpf_cnpj: '123.456.789-09',
@@ -117,22 +131,44 @@ test('Solicitações de Vistoria API — Visualizador lê com allowlist e é blo
   await withServer(
     {
       verifySession: makeVerifySession(),
-      getConfig: () => ({ baseUrl: 'https://administra.example/api/solicitacoes-vistoria', serviceToken: 'svc-secret' }),
-      fetchImpl: async (url) => {
+      getConfig: () => ({
+        baseUrl: 'https://administra.example/api/solicitacoes-vistoria',
+        serviceToken: 'svc-secret',
+      }),
+      fetchImpl: async (url, init) => {
         capturedUpstreamUrl = String(url);
-        return new Response(JSON.stringify({ items: [sampleItem] }), { status: 200 });
+        capturedGetHeaders = Object.fromEntries(
+          Object.entries((init?.headers as Record<string, string>) || {}).map(([k, v]) => [
+            k.toLowerCase(),
+            String(v),
+          ])
+        );
+        return new Response(JSON.stringify({ solicitacoes: [sampleItem] }), { status: 200 });
       },
     },
     async (baseUrl) => {
-      const getRes = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
+      const getRes = await fetch(`${baseUrl}/api/solicitacoes-vistoria?status=solicitada`, {
         headers: { Authorization: 'Bearer token-visualizador' },
       });
       assert.equal(getRes.status, 200);
       assert.match(capturedUpstreamUrl, /sistema_origem=classifica/);
+      assert.match(capturedUpstreamUrl, /status=solicitada/);
+      assert.equal(capturedGetHeaders.authorization, 'Bearer token-visualizador');
+      assert.equal(capturedGetHeaders['x-solicitacoes-service-token'], 'svc-secret');
+      assert.equal(capturedGetHeaders['x-sistema-origem'], 'classifica');
 
       const getBody = (await getRes.json()) as { items: Array<Record<string, unknown>> };
       assert.equal(getBody.items.length, 1);
       assert.equal(getBody.items[0].id, 'sol-1');
+      assert.equal(getBody.items[0].status, 'solicitada');
+      assert.equal(getBody.items[0].origem_ref_id, 'par-100');
+      assert.equal(getBody.items[0].barragem_nome, 'Barragem Esperança');
+      assert.equal(getBody.items[0].municipio, 'Cuiabá');
+      assert.equal(getBody.items[0].curso_agua, 'Rio Coxipó');
+      assert.equal(getBody.items[0].uso, 'Irrigação');
+      assert.equal(getBody.items[0].classificacao_atual, 'Categoria B');
+      assert.equal(getBody.items[0].empreendedor_nome, 'Empreendimento Esperança Ltda');
+      assert.equal(getBody.items[0].processo, 'SEMA-PRO-2026/001');
       assert.equal('cpf_cnpj' in getBody.items[0], false);
       assert.equal('segredo_interno' in getBody.items[0], false);
 
@@ -169,22 +205,34 @@ test('Solicitações de Vistoria API — Visualizador lê com allowlist e é blo
   );
 });
 
-test('Solicitações de Vistoria API — POST impõe sessão verificada, valida relato e bloqueia CPF/CNPJ', async () => {
+test('Solicitações de Vistoria API — POST mapeia contrato real Administra, anexa DPA/CRI, bloqueia chaves extras e CPF/CNPJ', async () => {
   let forwardedPayload: Record<string, unknown> | null = null;
-  let forwardedAuth = '';
+  let forwardedHeaders: Record<string, string> = {};
 
   await withServer(
     {
       verifySession: makeVerifySession(),
-      getConfig: () => ({ baseUrl: 'https://administra.example/api/solicitacoes-vistoria', serviceToken: 'svc-secret' }),
+      getConfig: () => ({
+        baseUrl: 'https://administra.example/api/solicitacoes-vistoria',
+        serviceToken: 'svc-secret',
+      }),
       fetchImpl: async (_url, init) => {
-        forwardedAuth = String((init?.headers as Record<string, string>)?.Authorization || '');
+        forwardedHeaders = Object.fromEntries(
+          Object.entries((init?.headers as Record<string, string>) || {}).map(([k, v]) => [
+            k.toLowerCase(),
+            String(v),
+          ])
+        );
         forwardedPayload = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
         return new Response(
           JSON.stringify({
-            item: {
+            solicitacao: {
               id: 'sol-created-1',
-              status: 'pendente',
+              sistema_origem: 'classifica',
+              status: 'solicitada',
+              solicitante_id: 'user-analista-a',
+              solicitante_nome: 'Analista A',
+              solicitante_email: 'analista.a@sema.mt.gov.br',
               ...forwardedPayload,
               created_at: '2026-01-01T10:00:00Z',
             },
@@ -194,7 +242,7 @@ test('Solicitações de Vistoria API — POST impõe sessão verificada, valida 
       },
     },
     async (baseUrl) => {
-      // Tentativa de falsificar solicitante e sistema_origem no body
+      // Tentativa de falsificar solicitante e sistema_origem no body + campos de mapeamento
       const okRes = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
         method: 'POST',
         headers: {
@@ -206,20 +254,90 @@ test('Solicitações de Vistoria API — POST impõe sessão verificada, valida 
           solicitante_id: 'fake-admin-id',
           solicitante_nome: 'Falsificado',
           solicitante_email: 'fake@example.com',
+          origem_ref_id: 'parecer-uuid-999',
           barragem_id: 'bar-123',
           barragem_nome: 'Barragem Norte',
           municipio: 'Sinop',
+          curso_agua: 'Rio Teles Pires',
+          coordenadas: "11°51'50\"S / 55°30'14\"W",
+          uso: 'Geração de energia',
           empreendedor_id: 'emp-456',
           empreendedor_nome: 'Agropecuária Norte Ltda',
+          processo: 'PROC-2026-77',
+          classificacao_atual: 'Categoria A',
+          dpa: 'Alto',
+          cri: 'Média',
           relato: 'Verificação de trincas no maciço e nível de água.',
         }),
       });
       assert.equal(okRes.status, 201);
-      assert.equal(forwardedAuth, 'Bearer svc-secret');
-      assert.equal(forwardedPayload?.sistema_origem, 'classifica');
-      assert.equal(forwardedPayload?.solicitante_id, 'user-analista-a');
-      assert.equal(forwardedPayload?.solicitante_nome, 'Analista A');
-      assert.equal(forwardedPayload?.solicitante_email, 'analista.a@sema.mt.gov.br');
+      assert.equal(forwardedHeaders.authorization, 'Bearer token-analista-a');
+      assert.equal(forwardedHeaders['x-solicitacoes-service-token'], 'svc-secret');
+      assert.equal(forwardedHeaders['x-sistema-origem'], 'classifica');
+
+      // Somente as 6 chaves permitidas
+      assert.deepEqual(Object.keys(forwardedPayload || {}).sort(), [
+        'barragem_id',
+        'dados_pre_preenchidos',
+        'empreendedor_id',
+        'origem_ref_id',
+        'processo_referencia',
+        'relato',
+      ]);
+
+      // Chaves proibidas NÃO podem estar no payload
+      for (const forbidden of [
+        'sistema_origem',
+        'solicitante_id',
+        'solicitante_nome',
+        'solicitante_email',
+        'processo',
+        'barragem_nome',
+        'empreendedor_nome',
+        'classificacao_atual',
+        'dpa',
+        'cri',
+      ]) {
+        assert.equal(forbidden in (forwardedPayload || {}), false);
+      }
+
+      assert.equal(forwardedPayload?.origem_ref_id, 'parecer-uuid-999');
+      assert.equal(forwardedPayload?.barragem_id, 'bar-123');
+      assert.equal(forwardedPayload?.empreendedor_id, 'emp-456');
+      assert.equal(forwardedPayload?.processo_referencia, 'PROC-2026-77');
+      assert.match(String(forwardedPayload?.relato || ''), /DPA: Alto \| CRI: Média$/);
+      assert.deepEqual(forwardedPayload?.dados_pre_preenchidos, {
+        nome_barragem: 'Barragem Norte',
+        municipio: 'Sinop',
+        curso_agua: 'Rio Teles Pires',
+        coordenadas: "11°51'50\"S / 55°30'14\"W",
+        uso: 'Geração de energia',
+        classificacao: 'Categoria A',
+        nome_empreendedor: 'Agropecuária Norte Ltda',
+      });
+
+      const createdBody = (await okRes.json()) as { item: Record<string, unknown> };
+      assert.equal(createdBody.item.barragem_nome, 'Barragem Norte');
+      assert.equal(createdBody.item.processo, 'PROC-2026-77');
+      assert.equal(createdBody.item.uso, 'Geração de energia');
+      assert.equal(createdBody.item.origem_ref_id, 'parecer-uuid-999');
+
+      // Relato + DPA/CRI longo respeita limite máximo de 1000 chars
+      const tightRes = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer token-analista-a',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          relato: 'A'.repeat(995),
+          dpa: 'Alto',
+          cri: 'Baixa',
+        }),
+      });
+      assert.equal(tightRes.status, 201);
+      assert.ok(String(forwardedPayload?.relato || '').length <= 1000);
+      assert.match(String(forwardedPayload?.relato || ''), /DPA: Alto \| CRI: Baixa$/);
 
       // Relato vazio -> 400
       const emptyRelato = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
@@ -232,6 +350,17 @@ test('Solicitações de Vistoria API — POST impõe sessão verificada, valida 
       });
       assert.equal(emptyRelato.status, 400);
 
+      // Relato < 3 caracteres -> 400
+      const shortRelato = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer token-analista-a',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ relato: 'ab' }),
+      });
+      assert.equal(shortRelato.status, 400);
+
       // Relato > 1000 caracteres -> 400
       const longRelato = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
         method: 'POST',
@@ -242,6 +371,66 @@ test('Solicitações de Vistoria API — POST impõe sessão verificada, valida 
         body: JSON.stringify({ relato: 'x'.repeat(1001) }),
       });
       assert.equal(longRelato.status, 400);
+
+      // origem_ref_id > 120 caracteres -> 400
+      const longOrigemRef = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer token-analista-a',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          relato: 'Vistoria técnica.',
+          origem_ref_id: 'r'.repeat(121),
+        }),
+      });
+      assert.equal(longOrigemRef.status, 400);
+
+      // dados_pre_preenchidos rejeita objetos/arrays, chaves extras e > 300 chars -> 400
+      const nestedObjDadosPre = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer token-analista-a',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          relato: 'Vistoria técnica.',
+          dados_pre_preenchidos: {
+            nome_barragem: { nested: 'proibido' },
+          },
+        }),
+      });
+      assert.equal(nestedObjDadosPre.status, 400);
+
+      const unknownKeyDadosPre = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer token-analista-a',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          relato: 'Vistoria técnica.',
+          dados_pre_preenchidos: {
+            chave_invalida: 'valor',
+          },
+        }),
+      });
+      assert.equal(unknownKeyDadosPre.status, 400);
+
+      const longDadosPre = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer token-analista-a',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          relato: 'Vistoria técnica.',
+          dados_pre_preenchidos: {
+            nome_barragem: 'B'.repeat(301),
+          },
+        }),
+      });
+      assert.equal(longDadosPre.status, 400);
 
       // CPF formatado no relato -> 400
       const cpfInRelato = await fetch(`${baseUrl}/api/solicitacoes-vistoria`, {
@@ -292,33 +481,45 @@ test('Solicitações de Vistoria API — POST impõe sessão verificada, valida 
   );
 });
 
-test('Solicitações de Vistoria API — edição/cancelamento restrito a autor ou Administrador', async () => {
+test('Solicitações de Vistoria API — edição/cancelamento restrito a autor ou Administrador com payloads reais', async () => {
+  let lastMutationUrl = '';
+  let lastMutationBody: Record<string, unknown> | null = null;
   let currentRecord = {
     id: 'sol-20',
     sistema_origem: 'classifica',
-    status: 'pendente',
+    status: 'solicitada',
     relato: 'Relato original',
     solicitante_id: 'user-analista-a',
     solicitante_nome: 'Analista A',
     solicitante_email: 'analista.a@sema.mt.gov.br',
     equipe: [],
+    motivo: null as string | null,
   };
 
   await withServer(
     {
       verifySession: makeVerifySession(),
-      getConfig: () => ({ baseUrl: 'https://administra.example/api/solicitacoes-vistoria', serviceToken: 'svc-secret' }),
-      fetchImpl: async (_url, init) => {
+      getConfig: () => ({
+        baseUrl: 'https://administra.example/api/solicitacoes-vistoria',
+        serviceToken: 'svc-secret',
+      }),
+      fetchImpl: async (url, init) => {
         if ((init?.method || 'GET').toUpperCase() === 'GET') {
-          return new Response(JSON.stringify({ item: currentRecord }), { status: 200 });
+          return new Response(JSON.stringify({ solicitacao: currentRecord }), { status: 200 });
         }
+        lastMutationUrl = String(url);
         const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
-        if (body.acao === 'cancelar') {
-          currentRecord = { ...currentRecord, status: 'cancelada' };
+        lastMutationBody = body;
+        if (lastMutationUrl.endsWith('/cancelar')) {
+          currentRecord = {
+            ...currentRecord,
+            status: 'cancelada',
+            motivo: typeof body.motivo === 'string' ? body.motivo : null,
+          };
         } else if (typeof body.relato === 'string') {
           currentRecord = { ...currentRecord, relato: body.relato };
         }
-        return new Response(JSON.stringify({ item: currentRecord }), { status: 200 });
+        return new Response(JSON.stringify({ solicitacao: currentRecord }), { status: 200 });
       },
     },
     async (baseUrl) => {
@@ -333,16 +534,25 @@ test('Solicitações de Vistoria API — edição/cancelamento restrito a autor 
       });
       assert.equal(forbiddenEdit.status, 403);
 
-      // Autor pode editar -> 200
+      // Autor pode editar -> 200 e envia SOMENTE { relato }
       const authorEdit = await fetch(`${baseUrl}/api/solicitacoes-vistoria/sol-20`, {
         method: 'PATCH',
         headers: {
           Authorization: 'Bearer token-analista-a',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ relato: 'Relato atualizado pelo autor' }),
+        body: JSON.stringify({
+          acao: 'editar',
+          atualizado_por_id: 'tentativa',
+          relato: 'Relato atualizado pelo autor',
+        }),
       });
       assert.equal(authorEdit.status, 200);
+      assert.equal(lastMutationUrl, 'https://administra.example/api/solicitacoes-vistoria/sol-20');
+      assert.deepEqual(lastMutationBody, { relato: 'Relato atualizado pelo autor' });
+      assert.equal('acao' in (lastMutationBody || {}), false);
+      assert.equal('atualizado_por_id' in (lastMutationBody || {}), false);
+
       const editedJson = (await authorEdit.json()) as { item: { relato: string } };
       assert.equal(editedJson.item.relato, 'Relato atualizado pelo autor');
 
@@ -353,22 +563,39 @@ test('Solicitações de Vistoria API — edição/cancelamento restrito a autor 
           Authorization: 'Bearer token-analista-b',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ motivo_cancelamento: 'Não autorizado' }),
+        body: JSON.stringify({ motivo: 'Não autorizado' }),
       });
       assert.equal(forbiddenCancel.status, 403);
 
-      // Administrador pode cancelar -> 200
+      // Administrador pode cancelar -> 200 e envia PATCH /:id/cancelar com SOMENTE { motivo }
       const adminCancel = await fetch(`${baseUrl}/api/solicitacoes-vistoria/sol-20/cancelar`, {
         method: 'PATCH',
         headers: {
           Authorization: 'Bearer token-admin',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ motivo_cancelamento: 'Cancelamento administrativo' }),
+        body: JSON.stringify({
+          acao: 'cancelar',
+          status: 'cancelada',
+          motivo_cancelamento: 'legado',
+          atualizado_por_id: 'tentativa',
+          motivo: 'Cancelamento administrativo',
+        }),
       });
       assert.equal(adminCancel.status, 200);
-      const canceledJson = (await adminCancel.json()) as { item: { status: string } };
+      assert.equal(
+        lastMutationUrl,
+        'https://administra.example/api/solicitacoes-vistoria/sol-20/cancelar'
+      );
+      assert.deepEqual(lastMutationBody, { motivo: 'Cancelamento administrativo' });
+      for (const forbidden of ['acao', 'status', 'motivo_cancelamento', 'atualizado_por_id']) {
+        assert.equal(forbidden in (lastMutationBody || {}), false);
+      }
+      const canceledJson = (await adminCancel.json()) as {
+        item: { status: string; motivo: string };
+      };
       assert.equal(canceledJson.item.status, 'cancelada');
+      assert.equal(canceledJson.item.motivo, 'Cancelamento administrativo');
     }
   );
 });
@@ -394,10 +621,13 @@ test('Solicitações de Vistoria API — observacao_campo restrita a equipe ou A
   await withServer(
     {
       verifySession: makeVerifySession(),
-      getConfig: () => ({ baseUrl: 'https://administra.example/api/solicitacoes-vistoria', serviceToken: 'svc-secret' }),
+      getConfig: () => ({
+        baseUrl: 'https://administra.example/api/solicitacoes-vistoria',
+        serviceToken: 'svc-secret',
+      }),
       fetchImpl: async (_url, init) => {
         if ((init?.method || 'GET').toUpperCase() === 'GET') {
-          return new Response(JSON.stringify({ item: currentRecord }), { status: 200 });
+          return new Response(JSON.stringify({ solicitacao: currentRecord }), { status: 200 });
         }
         obsForwardedBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
         currentRecord = {
@@ -407,7 +637,7 @@ test('Solicitações de Vistoria API — observacao_campo restrita a equipe ou A
         // Mesmo que upstream devolvesse campos diferentes, handler preserva status e data_realizacao
         return new Response(
           JSON.stringify({
-            item: {
+            solicitacao: {
               ...currentRecord,
               status: 'pendente',
               data_realizacao: '2000-01-01T00:00:00Z',
@@ -504,7 +734,10 @@ test('Solicitações de Vistoria API — resposta controlada se env ausente (503
   await withServer(
     {
       verifySession: makeVerifySession(),
-      getConfig: () => ({ baseUrl: 'https://administra.example/api/solicitacoes-vistoria', serviceToken: 'super-secret-token' }),
+      getConfig: () => ({
+        baseUrl: 'https://administra.example/api/solicitacoes-vistoria',
+        serviceToken: 'super-secret-token',
+      }),
       fetchImpl: async () =>
         new Response(JSON.stringify({ error: 'Já existe solicitação ativa para esta barragem.' }), {
           status: 409,
@@ -529,7 +762,10 @@ test('Solicitações de Vistoria API — resposta controlada se env ausente (503
   await withServer(
     {
       verifySession: makeVerifySession(),
-      getConfig: () => ({ baseUrl: 'https://administra.example/api/solicitacoes-vistoria', serviceToken: 'super-secret-token' }),
+      getConfig: () => ({
+        baseUrl: 'https://administra.example/api/solicitacoes-vistoria',
+        serviceToken: 'super-secret-token',
+      }),
       fetchImpl: async () => {
         throw new Error('ECONNREFUSED');
       },
@@ -546,17 +782,26 @@ test('Solicitações de Vistoria API — resposta controlada se env ausente (503
 });
 
 test('Solicitações de Vistoria API — recusa registros sem sistema_origem ou com outra origem na leitura e antes de mutações', async () => {
-  assert.equal(sanitizeSolicitacao({ id: 'x1', status: 'pendente', relato: 'Sem origem' }), null);
+  assert.equal(sanitizeSolicitacao({ id: 'x1', status: 'solicitada', relato: 'Sem origem' }), null);
   assert.equal(
-    sanitizeSolicitacao({ id: 'x2', sistema_origem: '', status: 'pendente', relato: 'Origem vazia' }),
+    sanitizeSolicitacao({ id: 'x2', sistema_origem: '', status: 'solicitada', relato: 'Origem vazia' }),
     null
   );
   assert.equal(
     sanitizeSolicitacao({
       id: 'x3',
       sistema_origem: 'fiscaliza',
-      status: 'pendente',
+      status: 'solicitada',
       relato: 'Outra origem',
+    }),
+    null
+  );
+  assert.equal(
+    sanitizeSolicitacao({
+      id: 'x3b',
+      sistema_origem: 'CLASSIFICA',
+      status: 'solicitada',
+      relato: 'Caixa alta não é exatamente classifica',
     }),
     null
   );
@@ -564,19 +809,19 @@ test('Solicitações de Vistoria API — recusa registros sem sistema_origem ou 
     sanitizeSolicitacao({
       id: 'x4',
       sistema_origem: 'classifica',
-      status: 'pendente',
+      status: 'solicitada',
       relato: 'Origem válida',
     }),
     null
   );
 
   const mixedItems = [
-    { id: 'sem-origem', status: 'pendente', relato: 'Sem origem' },
-    { id: 'outra-origem', sistema_origem: 'notifica', status: 'pendente', relato: 'Do Notifica' },
+    { id: 'sem-origem', status: 'solicitada', relato: 'Sem origem' },
+    { id: 'outra-origem', sistema_origem: 'notifica', status: 'solicitada', relato: 'Do Notifica' },
     {
       id: 'origem-classifica',
       sistema_origem: 'classifica',
-      status: 'pendente',
+      status: 'solicitada',
       relato: 'Do Classifica',
       solicitante_id: 'user-analista-a',
     },
@@ -613,15 +858,15 @@ test('Solicitações de Vistoria API — recusa registros sem sistema_origem ou 
         const method = (init?.method || 'GET').toUpperCase();
         if (method !== 'GET') {
           mutatingCalls++;
-          return new Response(JSON.stringify({ item: {} }), { status: 200 });
+          return new Response(JSON.stringify({ solicitacao: {} }), { status: 200 });
         }
         const rawUrl = String(url);
         const match = rawUrl.match(/\/([^/?]+)\?/);
         const id = match?.[1];
         if (id && byId[id]) {
-          return new Response(JSON.stringify({ item: byId[id] }), { status: 200 });
+          return new Response(JSON.stringify({ solicitacao: byId[id] }), { status: 200 });
         }
-        return new Response(JSON.stringify({ items: mixedItems }), { status: 200 });
+        return new Response(JSON.stringify({ solicitacoes: mixedItems }), { status: 200 });
       },
     },
     async (baseUrl) => {
@@ -664,7 +909,7 @@ test('Solicitações de Vistoria API — recusa registros sem sistema_origem ou 
           Authorization: 'Bearer token-admin',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ motivo_cancelamento: 'Tentativa' }),
+        body: JSON.stringify({ motivo: 'Tentativa' }),
       });
       assert.equal(cancelMissing.status, 404);
 
@@ -731,9 +976,10 @@ test('Solicitações de Vistoria API — não vaza mensagem de erro do serviço 
   }
 });
 
-test('Solicitações de Vistoria API — PATCH /:id/observacao envia apenas observacao_campo no corpo ao serviço central', async () => {
+test('Solicitações de Vistoria API — PATCH /:id/observacao envia apenas observacao_campo no corpo e headers do contrato central', async () => {
   let capturedMethod = '';
   let capturedBody: Record<string, unknown> | null = null;
+  let capturedHeaders: Record<string, string> = {};
 
   const existingRecord = {
     id: 'sol-obs-only',
@@ -754,14 +1000,20 @@ test('Solicitações de Vistoria API — PATCH /:id/observacao envia apenas obse
       }),
       fetchImpl: async (_url, init) => {
         const method = (init?.method || 'GET').toUpperCase();
+        capturedHeaders = Object.fromEntries(
+          Object.entries((init?.headers as Record<string, string>) || {}).map(([k, v]) => [
+            k.toLowerCase(),
+            String(v),
+          ])
+        );
         if (method === 'GET') {
-          return new Response(JSON.stringify({ item: existingRecord }), { status: 200 });
+          return new Response(JSON.stringify({ solicitacao: existingRecord }), { status: 200 });
         }
         capturedMethod = method;
         capturedBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
         return new Response(
           JSON.stringify({
-            item: {
+            solicitacao: {
               ...existingRecord,
               observacao_campo: capturedBody.observacao_campo ?? null,
             },
@@ -785,9 +1037,11 @@ test('Solicitações de Vistoria API — PATCH /:id/observacao envia apenas obse
       });
       assert.equal(res.status, 200);
       assert.equal(capturedMethod, 'PATCH');
+      assert.equal(capturedHeaders.authorization, 'Bearer token-analista-b');
+      assert.equal(capturedHeaders['x-solicitacoes-service-token'], 'svc-secret');
+      assert.equal(capturedHeaders['x-sistema-origem'], 'classifica');
       assert.deepEqual(capturedBody, { observacao_campo: 'Anotação de vistoria em campo.' });
       assert.deepEqual(Object.keys(capturedBody || {}), ['observacao_campo']);
     }
   );
 });
-

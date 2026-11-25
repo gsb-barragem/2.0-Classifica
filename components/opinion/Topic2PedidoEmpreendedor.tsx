@@ -10,6 +10,7 @@ import { BarragemMaster, EmpreendedorMaster, ParecerData } from '../../types';
 import { EcosystemSelector, ResponsavelTecnicoSearchItem } from '../EcosystemSelector';
 import { AuthContext } from '../../src/contexts/AuthContext';
 import { saveBarragemMaster, saveEmpreendedorMaster } from '../../src/services/administraService';
+import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../../src/config/integrationArchitecture';
 import { getUpgOptionsForMunicipality } from '../../src/utils/opinionCalculations';
 import { normalizeCoordinateToGMS } from '../../src/utils/coordinateUtils';
 
@@ -35,6 +36,7 @@ export const Topic2PedidoEmpreendedor: React.FC<Topic2PedidoEmpreendedorProps> =
   maskCpfCnpj,
 }) => {
   const { currentUser } = useContext(AuthContext);
+  const isMasterWriteBlocked = CLASSIFICA_INTEGRATION_ARCHITECTURE.masterWriteApi.blocked;
   const [savingToAdministra, setSavingToAdministra] = useState(false);
   const [registeringEmpreendedor, setRegisteringEmpreendedor] = useState(false);
 
@@ -114,6 +116,10 @@ export const Topic2PedidoEmpreendedor: React.FC<Topic2PedidoEmpreendedorProps> =
           },
           currentUser
         );
+        if (empRes.blocked) {
+          toast.error(empRes.message || 'Gravação direta de cadastros mestres no Administra está bloqueada.');
+          return;
+        }
         if (empRes.notConfigured) {
           toast.info(empRes.message || 'Escrita direta no Administra não configurada neste ambiente.');
           return;
@@ -153,6 +159,10 @@ export const Topic2PedidoEmpreendedor: React.FC<Topic2PedidoEmpreendedorProps> =
           },
           currentUser
         );
+        if (barRes.blocked) {
+          toast.error(barRes.message || 'Gravação direta de cadastros mestres no Administra está bloqueada.');
+          return;
+        }
         if (barRes.notConfigured) {
           toast.info(barRes.message || 'Escrita direta no Administra não configurada neste ambiente.');
           return;
@@ -382,20 +392,26 @@ export const Topic2PedidoEmpreendedor: React.FC<Topic2PedidoEmpreendedorProps> =
                   )}
                   {!readOnly && !formData.empreendedorId && formData.razaoSocial.trim() && (
                     <div className="mt-2 flex flex-wrap items-center justify-between gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900">
-                      <span>Empreendedor preenchido manualmente sem vínculo no Administra.</span>
-                      <button
-                        type="button"
-                        onClick={() => void handleRegisterEmpreendedor()}
-                        disabled={registeringEmpreendedor}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm disabled:opacity-60"
-                      >
-                        {registeringEmpreendedor ? (
-                          <Loader2 size={13} className="animate-spin" />
-                        ) : (
-                          <Database size={13} />
-                        )}
-                        Cadastrar Empreendedor na base de dados
-                      </button>
+                      <span>
+                        {isMasterWriteBlocked
+                          ? 'Empreendedor preenchido manualmente sem vínculo no Administra. Gravação direta bloqueada até a aprovação da API híbrida.'
+                          : 'Empreendedor preenchido manualmente sem vínculo no Administra.'}
+                      </span>
+                      {!isMasterWriteBlocked && (
+                        <button
+                          type="button"
+                          onClick={() => void handleRegisterEmpreendedor()}
+                          disabled={registeringEmpreendedor}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm disabled:opacity-60"
+                        >
+                          {registeringEmpreendedor ? (
+                            <Loader2 size={13} className="animate-spin" />
+                          ) : (
+                            <Database size={13} />
+                          )}
+                          Cadastrar Empreendedor na base de dados
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
