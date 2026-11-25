@@ -18,7 +18,7 @@ import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../config/integrationArchit
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { logActivity } from '../lib/auditService';
 import { AppDocument } from '../contexts/DataContext';
-import { normalizeCoordinateToGMS } from '../utils/coordinateUtils';
+import { normalizeCoordinateToGMS, parseGMSToDecimal } from '../utils/coordinateUtils';
 
 const CURRENT_SYSTEM: SistemaOrigem = 'CLASSIFICA_CSB';
 
@@ -131,13 +131,102 @@ export function mapCanonicalEmpreendedor(record: Record<string, any>): Empreende
   };
 }
 
+export interface MapCanonicalBarragemOptions {
+  source?: 'legacy' | 'v2';
+}
+
+function parseStrictCoordinateNumber(value: unknown, maxAbs: number): number | null {
+  let num = NaN;
+  if (typeof value === 'number') {
+    num = value;
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!/^[-+]?\d+(?:[.,]\d+)?$/.test(trimmed)) {
+      return null;
+    }
+    num = Number(trimmed.replace(',', '.'));
+  }
+
+  if (!Number.isFinite(num) || Math.abs(num) > maxAbs) {
+    return null;
+  }
+  return num;
+}
+
+function resolveSafeCoordinateGms(
+  rawValue: unknown,
+  numericValue: number | null,
+  maxAbs: number
+): string | null {
+  if (numericValue !== null) {
+    return normalizeCoordinateToGMS(numericValue) || null;
+  }
+  if (typeof rawValue !== 'string') {
+    return null;
+  }
+  const normalized = normalizeCoordinateToGMS(rawValue);
+  if (!normalized) {
+    return null;
+  }
+  const parsed = parseGMSToDecimal(normalized);
+  if (!Number.isFinite(parsed) || Math.abs(parsed) > maxAbs) {
+    return null;
+  }
+  return normalized;
+}
+
 export function mapCanonicalBarragem(
   record: Record<string, any>,
-  empreendedor?: Record<string, any> | null
+  empreendedor?: Record<string, any> | null,
+  options?: MapCanonicalBarragemOptions
 ): BarragemMaster {
+  if (options?.source === 'v2') {
+    const latDecimal = parseStrictCoordinateNumber(record?.latitude, 90);
+    const longDecimal = parseStrictCoordinateNumber(record?.longitude, 180);
+
+    return {
+      id: pickCanonicalField(record, [/^id$/i]) || '',
+      empreendedor_id: pickCanonicalField(record, [/^empreendedor_id$/i]),
+      empreendedor_nome: null,
+      empreendedor_cpf_cnpj: null,
+      snisb: pickCanonicalField(record, [/^snisb$/i]),
+      nome: pickCanonicalField(record, [/^nome$/i]) || 'Barragem sem nome',
+      municipio: pickCanonicalField(record, [/^municipio$/i]) || '',
+      upg: null,
+      sub_bacia: null,
+      curso_agua: pickCanonicalField(record, [/^curso_agua$/i]),
+      zona: null,
+      localizacao: null,
+      lat_decimal: latDecimal,
+      long_decimal: longDecimal,
+      lat_gms: resolveSafeCoordinateGms(record?.latitude, latDecimal, 90),
+      long_gms: resolveSafeCoordinateGms(record?.longitude, longDecimal, 180),
+      altura_maxima: pickCanonicalField(record, [/^altura$/i, /^altura_maxima$/i]),
+      comprimento_coroamento: null,
+      largura_coroamento: null,
+      volume_nmo: null,
+      volume_nmm: null,
+      tipo_estrutural: null,
+      tipo_fundacao: null,
+      finalidade: null,
+      situacao: pickCanonicalField(record, [/^situacao$/i]),
+      dpa_atual: pickCanonicalField(record, [/^dano_potencial$/i, /^dpa_atual$/i, /^dpa$/i]),
+      cri_atual: pickCanonicalField(record, [/^categoria_risco$/i, /^cri_atual$/i, /^cri$/i]),
+      enquadramento_pnsb: null,
+      sistema_origem: 'ADMINISTRA_BARRAGENS',
+      created_by_user_id: null,
+      created_by_name: null,
+      created_at: undefined,
+      updated_at: undefined,
+    };
+  }
+
   const empId =
     pickCanonicalField(record, [/^empreendedor_id$/i, /^id_empreendedor$/i]) ||
     pickCanonicalField(empreendedor, [/^id$/i, /^empreendedor_id$/i, /^id_empreendedor$/i]);
+
+  const legacyLatDec = parseStrictCoordinateNumber(record?.lat_decimal, 90);
+  const legacyLongDec = parseStrictCoordinateNumber(record?.long_decimal, 180);
 
   return {
     id: pickCanonicalField(record, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]) || '',
@@ -170,26 +259,11 @@ export function mapCanonicalBarragem(
     curso_agua: pickCanonicalField(record, [/^curso_agua$/i, /^curso_dagua$/i, /^rio$/i]),
     zona: pickCanonicalField(record, [/^zona$/i]),
     localizacao: pickCanonicalField(record, [/^localizacao$/i, /^endereco$/i]),
-    lat_decimal: (() => {
-      if (typeof record?.lat_decimal === 'number') return record.lat_decimal;
-      if (typeof record?.lat_decimal === 'string' && record.lat_decimal.trim() !== '') {
-        const parsed = parseFloat(record.lat_decimal.replace(',', '.'));
-        return Number.isFinite(parsed) ? parsed : null;
-      }
-      return null;
-    })(),
-    long_decimal: (() => {
-      if (typeof record?.long_decimal === 'number') return record.long_decimal;
-      if (typeof record?.long_decimal === 'string' && record.long_decimal.trim() !== '') {
-        const parsed = parseFloat(record.long_decimal.replace(',', '.'));
-        return Number.isFinite(parsed) ? parsed : null;
-      }
-      return null;
-    })(),
+    lat_decimal: legacyLatDec,
+    long_decimal: legacyLongDec,
     lat_gms: (() => {
       const rawLat = pickCanonicalField(record, [/^lat_gms$/i, /^latitude_gms$/i, /^latitude$/i, /^lat$/i]);
-      const dec = typeof record?.lat_decimal === 'number' ? record.lat_decimal : typeof record?.lat_decimal === 'string' ? parseFloat(record.lat_decimal.replace(',', '.')) : null;
-      return normalizeCoordinateToGMS(rawLat, dec) || null;
+      return normalizeCoordinateToGMS(rawLat, legacyLatDec) || null;
     })(),
     long_gms: (() => {
       const rawLong = pickCanonicalField(record, [
@@ -199,8 +273,7 @@ export function mapCanonicalBarragem(
         /^long$/i,
         /^lon$/i,
       ]);
-      const dec = typeof record?.long_decimal === 'number' ? record.long_decimal : typeof record?.long_decimal === 'string' ? parseFloat(record.long_decimal.replace(',', '.')) : null;
-      return normalizeCoordinateToGMS(rawLong, dec) || null;
+      return normalizeCoordinateToGMS(rawLong, legacyLongDec) || null;
     })(),
     altura_maxima: pickCanonicalField(record, [/^altura_maxima$/i, /^altura$/i]),
     comprimento_coroamento: pickCanonicalField(record, [
@@ -226,6 +299,10 @@ export function mapCanonicalBarragem(
     created_at: pickCanonicalField(record, [/^created_at$/i]) || undefined,
     updated_at: pickCanonicalField(record, [/^updated_at$/i]) || undefined,
   };
+}
+
+export function mapBarragemV2ToMaster(dto: BarragemV2Dto): BarragemMaster {
+  return mapCanonicalBarragem(dto, null, { source: 'v2' });
 }
 
 export interface RtArtVinculo {

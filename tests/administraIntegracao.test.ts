@@ -1333,3 +1333,215 @@ test('EcosystemHub aba Barragens renderiza DTO v2 mascarado sem bloqueio pelo av
   assert.equal(emptyHtml.includes('Erro ao consultar Barragens (v2)'), false);
 });
 
+test('mapCanonicalBarragem com source v2 e mapBarragemV2ToMaster mapeiam campos seguros e mantêm volume pendente', async () => {
+  const { mapCanonicalBarragem, mapBarragemV2ToMaster } = await import(
+    '../src/services/administraService'
+  );
+
+  const dtoV2Numeric = {
+    id: 'bar-v2-map-1',
+    nome: 'Barragem Piloto Mapeada',
+    car: 'MT-CAR-001',
+    uf: 'MT',
+    municipio: 'Cuiabá',
+    municipio_ibge: '5103403',
+    empreendimento: 'UHE Empreendimento Não Derivável',
+    processo: 'PROC-2026-99',
+    snisb: 'SNISB-777',
+    curso_agua: 'Rio Cuiabá',
+    latitude: -15.601,
+    longitude: '-56,097',
+    altura: 32.5,
+    volume: 1500000,
+    dano_potencial: 'Alto',
+    categoria_risco: 'Média',
+    classificada_em: '2026-02-01T12:00:00Z',
+    situacao: 'Ativa',
+    empreendedor_id: 'emp-v2-10',
+  };
+
+  const mappedDirect = mapBarragemV2ToMaster(dtoV2Numeric);
+  const mappedExplicit = mapCanonicalBarragem(dtoV2Numeric, null, { source: 'v2' });
+
+  assert.deepEqual(mappedDirect, mappedExplicit);
+  assert.equal(mappedDirect.id, 'bar-v2-map-1');
+  assert.equal(mappedDirect.nome, 'Barragem Piloto Mapeada');
+  assert.equal(mappedDirect.municipio, 'Cuiabá');
+  assert.equal(mappedDirect.snisb, 'SNISB-777');
+  assert.equal(mappedDirect.curso_agua, 'Rio Cuiabá');
+  assert.equal(mappedDirect.situacao, 'Ativa');
+  assert.equal(mappedDirect.empreendedor_id, 'emp-v2-10');
+  assert.equal(mappedDirect.lat_decimal, -15.601);
+  assert.equal(mappedDirect.long_decimal, -56.097);
+  assert.equal(mappedDirect.lat_gms, '15°36\'03,60"');
+  assert.equal(mappedDirect.long_gms, '56°05\'49,20"');
+  assert.equal(mappedDirect.altura_maxima, '32.5');
+  assert.equal(mappedDirect.dpa_atual, 'Alto');
+  assert.equal(mappedDirect.cri_atual, 'Média');
+
+  // Regra explícita: volume do DTO v2 não deve preencher volume_nmo nem volume_nmm
+  assert.equal(mappedDirect.volume_nmo, null);
+  assert.equal(mappedDirect.volume_nmm, null);
+
+  // Campos ausentes no contrato v2 não devem ser inventados ou derivados
+  assert.equal(mappedDirect.empreendedor_nome, null);
+  assert.equal(mappedDirect.empreendedor_cpf_cnpj, null);
+  assert.equal(mappedDirect.upg, null);
+  assert.equal(mappedDirect.sub_bacia, null);
+  assert.equal(mappedDirect.zona, null);
+  assert.equal(mappedDirect.localizacao, null);
+  assert.equal(mappedDirect.comprimento_coroamento, null);
+  assert.equal(mappedDirect.largura_coroamento, null);
+  assert.equal(mappedDirect.tipo_estrutural, null);
+  assert.equal(mappedDirect.tipo_fundacao, null);
+  assert.equal(mappedDirect.finalidade, null);
+  assert.equal(mappedDirect.enquadramento_pnsb, null);
+  assert.equal(mappedDirect.created_by_user_id, null);
+  assert.equal(mappedDirect.created_by_name, null);
+  assert.equal(mappedDirect.created_at, undefined);
+  assert.equal(mappedDirect.updated_at, undefined);
+  assert.equal(mappedDirect.sistema_origem, 'ADMINISTRA_BARRAGENS');
+
+  // Coordenadas em GMS válido preenchem apenas GMS, sem inventar decimal
+  const mappedGmsOnly = mapBarragemV2ToMaster({
+    ...dtoV2Numeric,
+    latitude: '15°36\'03,60" S',
+    longitude: '56°05\'49,20" O',
+    volume: '2500000',
+  });
+  assert.equal(mappedGmsOnly.lat_decimal, null);
+  assert.equal(mappedGmsOnly.long_decimal, null);
+  assert.equal(mappedGmsOnly.lat_gms, '15°36\'03,60"');
+  assert.equal(mappedGmsOnly.long_gms, '56°05\'49,20"');
+  assert.equal(mappedGmsOnly.volume_nmo, null);
+  assert.equal(mappedGmsOnly.volume_nmm, null);
+});
+
+test('mapeamento v2 e normalizeCoordinateToGMS rejeitam coordenadas mascaradas, parciais, fora de faixa ou inválidas', async () => {
+  const { mapBarragemV2ToMaster } = await import('../src/services/administraService');
+  const { normalizeCoordinateToGMS } = await import('../src/utils/coordinateUtils');
+
+  const invalidInputs: Array<string | number | null | undefined> = [
+    '***',
+    '-15.60**',
+    '15°36\'**',
+    '15°36\'',
+    '15°',
+    'mascarado',
+    '[REDACTED]',
+    'N/A',
+    '--',
+    '5103403',
+    '15°75\'00,00"',
+    '15°30\'65,00"',
+    '185°00\'00,00"',
+    999,
+    NaN,
+    Infinity,
+    '',
+    null,
+  ];
+
+  for (const bad of invalidInputs) {
+    assert.equal(
+      normalizeCoordinateToGMS(bad),
+      '',
+      `normalizeCoordinateToGMS deve rejeitar entrada inválida: ${String(bad)}`
+    );
+  }
+
+  assert.equal(normalizeCoordinateToGMS('', '-15.60**'), '');
+  assert.equal(normalizeCoordinateToGMS(null, -15.601), '15°36\'03,60"');
+  assert.equal(normalizeCoordinateToGMS('15°36\'03,60" S'), '15°36\'03,60"');
+  assert.equal(normalizeCoordinateToGMS(-15.601), '15°36\'03,60"');
+
+  const maskedCases: Array<{ lat: string | number | null; lon: string | number | null }> = [
+    { lat: '***', lon: 'mascarado' },
+    { lat: '-15.60**', lon: '-56.09**' },
+    { lat: '15°36\'**', lon: '56°05\'' },
+    { lat: '95', lon: '185' },
+    { lat: '95°00\'00,00"', lon: '181°00\'00,00"' },
+    { lat: 95, lon: -181 },
+    { lat: null, lon: null },
+  ];
+
+  for (const coords of maskedCases) {
+    const mapped = mapBarragemV2ToMaster({
+      id: 'bar-v2-mask',
+      nome: 'Barragem Mascarada',
+      car: null,
+      uf: 'MT',
+      municipio: 'Sinop',
+      municipio_ibge: null,
+      empreendimento: null,
+      processo: null,
+      snisb: null,
+      curso_agua: null,
+      latitude: coords.lat,
+      longitude: coords.lon,
+      altura: null,
+      volume: 1000,
+      dano_potencial: null,
+      categoria_risco: null,
+      classificada_em: null,
+      situacao: null,
+      empreendedor_id: null,
+    });
+
+    assert.equal(mapped.lat_decimal, null);
+    assert.equal(mapped.long_decimal, null);
+    assert.equal(mapped.lat_gms, null);
+    assert.equal(mapped.long_gms, null);
+    assert.equal(mapped.volume_nmo, null);
+    assert.equal(mapped.volume_nmm, null);
+  }
+});
+
+test('mapCanonicalBarragem preserva integralmente comportamento legado quando entrada não é v2', async () => {
+  const { mapCanonicalBarragem } = await import('../src/services/administraService');
+
+  const legacyMapped = mapCanonicalBarragem(
+    {
+      id: 'bar-leg-1',
+      nome: 'Barragem Legada',
+      municipio: 'Lucas do Rio Verde',
+      snisb: 'SNISB-LEG-1',
+      upg: 'UPG-01',
+      sub_bacia: 'Teles Pires',
+      curso_agua: 'Rio Verde',
+      zona: 'Rural',
+      localizacao: 'Fazenda Modelo',
+      lat_decimal: -13.05,
+      long_decimal: '-55,91',
+      altura_maxima: '18.5',
+      volume: '850000',
+      volume_maximo: '920000',
+      dpa_atual: 'Médio',
+      cri_atual: 'Baixa',
+      enquadramento_pnsb: true,
+      sistema_origem: 'CLASSIFICA_CSB',
+    },
+    {
+      id: 'emp-leg-1',
+      razao_social: 'Agropecuária Legada Ltda',
+      cpf_cnpj: '12345678000190',
+    }
+  );
+
+  assert.equal(legacyMapped.id, 'bar-leg-1');
+  assert.equal(legacyMapped.empreendedor_id, 'emp-leg-1');
+  assert.equal(legacyMapped.empreendedor_nome, 'Agropecuária Legada Ltda');
+  assert.equal(legacyMapped.empreendedor_cpf_cnpj, '12345678000190');
+  assert.equal(legacyMapped.lat_decimal, -13.05);
+  assert.equal(legacyMapped.long_decimal, -55.91);
+  assert.equal(legacyMapped.lat_gms, '13°03\'00,00"');
+  assert.equal(legacyMapped.long_gms, '55°54\'36,00"');
+  assert.equal(legacyMapped.altura_maxima, '18.5');
+  assert.equal(legacyMapped.volume_nmo, '850000');
+  assert.equal(legacyMapped.volume_nmm, '920000');
+  assert.equal(legacyMapped.dpa_atual, 'Médio');
+  assert.equal(legacyMapped.cri_atual, 'Baixa');
+  assert.equal(legacyMapped.enquadramento_pnsb, true);
+  assert.equal(legacyMapped.sistema_origem, 'CLASSIFICA_CSB');
+});
+

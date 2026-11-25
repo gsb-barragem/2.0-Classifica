@@ -50,19 +50,31 @@ export function formatDigitsAsGms(digitsInput: string): string {
   return formatted;
 }
 
+function parseStrictDecimalCoordinate(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : NaN;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!/^[-+]?\d+(?:[.,]\d+)?$/.test(trimmed)) {
+      return NaN;
+    }
+    const parsed = Number(trimmed.replace(',', '.'));
+    return Number.isFinite(parsed) ? parsed : NaN;
+  }
+  return NaN;
+}
+
 export function normalizeCoordinateToGMS(
   value: unknown,
   decimalFallback?: number | string | null
 ): string {
-  const parsedFallback =
-    typeof decimalFallback === 'number'
-      ? decimalFallback
-      : typeof decimalFallback === 'string' && decimalFallback.trim() !== ''
-      ? parseFloat(decimalFallback.trim().replace(',', '.'))
-      : NaN;
+  const parsedFallback = parseStrictDecimalCoordinate(decimalFallback);
 
   if (typeof value === 'number') {
-    return Number.isFinite(value) ? decimalToGms(value) : '';
+    return Number.isFinite(value) && Math.abs(value) <= 180
+      ? decimalToGms(value)
+      : '';
   }
 
   const str = typeof value === 'string' ? value.trim() : '';
@@ -74,17 +86,31 @@ export function normalizeCoordinateToGMS(
 
   const gmsMatch = str.match(FULL_GMS_REGEX);
   if (gmsMatch) {
+    const degNum = parseInt(gmsMatch[1], 10);
+    const minNum = parseInt(gmsMatch[2], 10);
+    const secNum = parseInt(gmsMatch[3], 10);
+    const hunRaw = (gmsMatch[4] || '00').slice(0, 2).padEnd(2, '0');
+    const hunNum = parseInt(hunRaw, 10);
+
+    if (
+      degNum > 180 ||
+      minNum >= 60 ||
+      secNum >= 60 ||
+      (degNum === 180 && (minNum > 0 || secNum > 0 || hunNum > 0))
+    ) {
+      return '';
+    }
+
     const d = gmsMatch[1].padStart(2, '0');
     const m = gmsMatch[2].padStart(2, '0');
     const s = gmsMatch[3].padStart(2, '0');
-    const h = (gmsMatch[4] || '00').slice(0, 2).padEnd(2, '0');
-    return `${d}°${m}'${s},${h}"`;
+    return `${d}°${m}'${s},${hunRaw}"`;
   }
 
   if (!str.includes('°') && !str.includes('º')) {
     if (/^[-+]?\s*\d{1,3}(?:[.,]\d+)?\s*[NSOWE]?$/i.test(str)) {
       const cleanNum = str.replace(/[NSOWE\s]/gi, '').replace(',', '.');
-      const num = parseFloat(cleanNum);
+      const num = Number(cleanNum);
       const hasDecimalOrSign =
         str.includes('.') ||
         str.includes(',') ||
@@ -98,8 +124,7 @@ export function normalizeCoordinateToGMS(
     }
   }
 
-  const formatted = formatDigitsAsGms(str);
-  return formatted || str;
+  return '';
 }
 
 export function formatGmsInput(nextValue: string, prevValue = ''): string {
