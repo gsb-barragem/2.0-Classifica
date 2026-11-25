@@ -112,30 +112,90 @@ export function resolveAdministraHealthUrl(rawBaseUrl: string): string {
   return `${parsed.origin}${ADMINISTRA_HEALTH_PATH}`;
 }
 
-export function buildS2sV2HealthCanonicalString(
-  input: S2sV2HealthCanonicalInput
-): string {
+export function normalizeS2sPath(rawPath: string): string {
+  const clean = assertSingleLineValue(rawPath, 'path');
+  const withLeadingSlash = clean.startsWith('/') ? clean : `/${clean}`;
+  return withLeadingSlash.length > 1
+    ? withLeadingSlash.replace(/\/+$/, '')
+    : withLeadingSlash;
+}
+
+export function canonicalizeS2sQuery(rawQuery = ''): string {
+  const trimmed = rawQuery.trim().replace(/^\?/, '');
+  if (!trimmed) return '';
+  if (/[\r\n]/.test(trimmed)) {
+    throw new Error('query contém quebra de linha inválida.');
+  }
+  const params = new URLSearchParams(trimmed);
+  const sorted = Array.from(params.entries()).sort(([aKey, aVal], [bKey, bVal]) => {
+    if (aKey !== bKey) return aKey < bKey ? -1 : 1;
+    return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+  });
+  return new URLSearchParams(sorted).toString();
+}
+
+export interface S2sV2CanonicalInput {
+  method: string;
+  path: string;
+  query?: string;
+  contentType?: string;
+  bodySha256?: string;
+  keyId: string;
+  timestamp: string;
+  jti: string;
+  actorSegment?: string;
+}
+
+export function buildS2sV2CanonicalString(input: S2sV2CanonicalInput): string {
+  const method = assertSingleLineValue(input.method, 'method').toUpperCase();
+  const normalizedPath = normalizeS2sPath(input.path);
+  const canonicalQuery = canonicalizeS2sQuery(input.query ?? '');
+  const contentType = (input.contentType ?? '').trim();
+  if (/[\r\n]/.test(contentType)) {
+    throw new Error('contentType contém quebra de linha inválida.');
+  }
+  const bodySha256 = assertSingleLineValue(
+    input.bodySha256 ?? EMPTY_BODY_SHA256,
+    'bodySha256'
+  );
   const keyId = assertSingleLineValue(input.keyId, 'CLASSIFICA_S2S_KID');
   const timestamp = assertSingleLineValue(input.timestamp, 'timestamp');
   if (!/^\d+$/.test(timestamp)) {
     throw new Error('timestamp deve ser Unix em segundos.');
   }
   const jti = assertSingleLineValue(input.jti, 'jti');
+  const actorSegment = input.actorSegment ?? '|';
+  if (/[\r\n]/.test(actorSegment)) {
+    throw new Error('actorSegment contém quebra de linha inválida.');
+  }
 
-  const lines = [
+  return [
     S2S_V2_VERSION,
-    'GET',
-    ADMINISTRA_HEALTH_PATH,
-    '',
-    '',
-    EMPTY_BODY_SHA256,
+    method,
+    normalizedPath,
+    canonicalQuery,
+    contentType,
+    bodySha256,
     keyId,
     timestamp,
     jti,
-    '|',
-  ];
+    actorSegment,
+  ].join('\n');
+}
 
-  return lines.join('\n');
+export function buildS2sV2HealthCanonicalString(
+  input: S2sV2HealthCanonicalInput
+): string {
+  return buildS2sV2CanonicalString({
+    method: 'GET',
+    path: ADMINISTRA_HEALTH_PATH,
+    query: '',
+    contentType: '',
+    bodySha256: EMPTY_BODY_SHA256,
+    keyId: input.keyId,
+    timestamp: input.timestamp,
+    jti: input.jti,
+  });
 }
 
 export function signS2sV2Canonical(
@@ -151,11 +211,17 @@ export function signS2sV2Canonical(
   return signature.toString('base64');
 }
 
-export function createAdministraS2sHealthHeaders(params: {
+export function createAdministraS2sHeaders(params: {
+  method: string;
+  path: string;
+  query?: string;
+  contentType?: string;
+  bodySha256?: string;
   keyId: string;
   privateKeyPem: string;
   timestamp?: string;
   jti?: string;
+  actorSegment?: string;
 }): {
   headers: S2sV2HealthHeaders;
   canonicalString: string;
@@ -166,11 +232,21 @@ export function createAdministraS2sHealthHeaders(params: {
     params.timestamp ?? String(Math.floor(Date.now() / 1000));
   const jti = params.jti ?? crypto.randomUUID();
   const keyId = assertSingleLineValue(params.keyId, 'CLASSIFICA_S2S_KID');
+  const bodySha256 = assertSingleLineValue(
+    params.bodySha256 ?? EMPTY_BODY_SHA256,
+    'bodySha256'
+  );
 
-  const canonicalString = buildS2sV2HealthCanonicalString({
+  const canonicalString = buildS2sV2CanonicalString({
+    method: params.method,
+    path: params.path,
+    query: params.query,
+    contentType: params.contentType,
+    bodySha256,
     keyId,
     timestamp,
     jti,
+    actorSegment: params.actorSegment,
   });
   const signature = signS2sV2Canonical(canonicalString, params.privateKeyPem);
 
@@ -182,10 +258,34 @@ export function createAdministraS2sHealthHeaders(params: {
       'x-s2s-key-id': keyId,
       'x-s2s-timestamp': timestamp,
       'x-s2s-jti': jti,
-      'x-s2s-body-sha256': EMPTY_BODY_SHA256,
+      'x-s2s-body-sha256': bodySha256,
       'x-s2s-signature': signature,
     },
   };
+}
+
+export function createAdministraS2sHealthHeaders(params: {
+  keyId: string;
+  privateKeyPem: string;
+  timestamp?: string;
+  jti?: string;
+}): {
+  headers: S2sV2HealthHeaders;
+  canonicalString: string;
+  timestamp: string;
+  jti: string;
+} {
+  return createAdministraS2sHeaders({
+    method: 'GET',
+    path: ADMINISTRA_HEALTH_PATH,
+    query: '',
+    contentType: '',
+    bodySha256: EMPTY_BODY_SHA256,
+    keyId: params.keyId,
+    privateKeyPem: params.privateKeyPem,
+    timestamp: params.timestamp,
+    jti: params.jti,
+  });
 }
 
 export function readAdministraS2sEnv(

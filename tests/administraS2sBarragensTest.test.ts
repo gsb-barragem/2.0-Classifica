@@ -16,9 +16,14 @@ import {
   ADMINISTRA_BARRAGENS_TEST_PATH,
   ADMINISTRA_BARRAGENS_TEST_QUERY,
   buildS2sV2BarragensTestCanonicalString,
+  createAdministraS2sBarragensHeaders,
   testAdministraBarragensS2s,
 } from '../server/administraS2sBarragensTest';
-import { EMPTY_BODY_SHA256 } from '../server/administraS2sHealth';
+import {
+  buildS2sV2CanonicalString,
+  buildS2sV2HealthCanonicalString,
+  EMPTY_BODY_SHA256,
+} from '../server/administraS2sHealth';
 import {
   AdministraS2sBarragensTempTestCard,
   TEMP_S2S_BARRAGENS_TEST_ENDPOINT,
@@ -113,6 +118,95 @@ test('buildS2sV2BarragensTestCanonicalString assina GET /api/v2/barragens com qu
     '550e8400-e29b-41d4-a716-446655440000',
     '|',
   ]);
+});
+
+test('canonicalizador compartilhado coincide byte a byte com a string de GET /api/v2/barragens?limit=1 e difere do health apenas em path e query', () => {
+  const keyId = 'classifica-ed25519-2026-02';
+  const timestamp = '1764000000';
+  const jti = '550e8400-e29b-41d4-a716-446655440000';
+
+  const sharedCanonical = buildS2sV2CanonicalString({
+    method: 'GET',
+    path: '/api/v2/barragens',
+    query: 'limit=1',
+    contentType: '',
+    bodySha256: EMPTY_BODY_SHA256,
+    keyId,
+    timestamp,
+    jti,
+  });
+
+  const barragensCanonical = buildS2sV2BarragensTestCanonicalString({
+    keyId,
+    timestamp,
+    jti,
+  });
+
+  const expectedString = [
+    'S2S-V2',
+    'GET',
+    '/api/v2/barragens',
+    'limit=1',
+    '',
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    'classifica-ed25519-2026-02',
+    timestamp,
+    jti,
+    '|',
+  ].join('\n');
+
+  assert.equal(barragensCanonical, sharedCanonical);
+  assert.equal(sharedCanonical, expectedString);
+  assert.equal(
+    Buffer.compare(
+      Buffer.from(barragensCanonical, 'utf8'),
+      Buffer.from(expectedString, 'utf8')
+    ),
+    0
+  );
+  assert.equal(sharedCanonical.endsWith('\n'), false);
+
+  const healthCanonical = buildS2sV2HealthCanonicalString({
+    keyId,
+    timestamp,
+    jti,
+  });
+
+  const barragensLines = barragensCanonical.split('\n');
+  const healthLines = healthCanonical.split('\n');
+  assert.equal(barragensLines.length, 10);
+  assert.equal(healthLines.length, 10);
+
+  for (let i = 0; i < 10; i++) {
+    if (i === 2) {
+      assert.equal(healthLines[i], '/api/v2/health');
+      assert.equal(barragensLines[i], '/api/v2/barragens');
+    } else if (i === 3) {
+      assert.equal(healthLines[i], '');
+      assert.equal(barragensLines[i], 'limit=1');
+    } else {
+      assert.equal(barragensLines[i], healthLines[i]);
+    }
+  }
+
+  const { privateKeyPem, publicKey } = generateEphemeralEd25519Pair();
+  const signed = createAdministraS2sBarragensHeaders({
+    keyId,
+    privateKeyPem,
+    timestamp,
+    jti,
+  });
+  assert.equal(signed.canonicalString, expectedString);
+  assert.equal(signed.headers['x-s2s-key-id'], 'classifica-ed25519-2026-02');
+  assert.equal(
+    crypto.verify(
+      null,
+      Buffer.from(expectedString, 'utf8'),
+      publicKey,
+      Buffer.from(signed.headers['x-s2s-signature'], 'base64')
+    ),
+    true
+  );
 });
 
 test('testAdministraBarragensS2s assina Ed25519 para /api/v2/barragens?limit=1 e extrai apenas política de mascaramento sem retornar registros', async () => {

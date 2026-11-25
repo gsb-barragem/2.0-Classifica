@@ -1,9 +1,10 @@
-import crypto from 'node:crypto';
 import {
+  buildS2sV2CanonicalString,
+  canonicalizeS2sQuery,
+  createAdministraS2sHeaders,
   EMPTY_BODY_SHA256,
+  normalizeS2sPath,
   readAdministraS2sEnv,
-  S2S_V2_VERSION,
-  signS2sV2Canonical,
   type S2sV2HealthHeaders,
 } from './administraS2sHealth.ts';
 
@@ -20,17 +21,6 @@ export interface AdministraBarragensS2sTestResult {
   ok: boolean;
   status: number;
   maskingPolicy: SafeMaskingPolicyValue;
-}
-
-function assertSingleLineValue(value: string, fieldName: string): string {
-  const clean = value.trim();
-  if (!clean) {
-    throw new Error(`${fieldName} não configurado.`);
-  }
-  if (/[\r\n]/.test(clean)) {
-    throw new Error(`${fieldName} contém quebra de linha inválida.`);
-  }
-  return clean;
 }
 
 export function resolveAdministraBarragensTestUrl(rawBaseUrl: string): string {
@@ -64,7 +54,9 @@ export function resolveAdministraBarragensTestUrl(rawBaseUrl: string): string {
     );
   }
 
-  return `${parsed.origin}${ADMINISTRA_BARRAGENS_TEST_PATH}?${ADMINISTRA_BARRAGENS_TEST_QUERY}`;
+  const normalizedPath = normalizeS2sPath(ADMINISTRA_BARRAGENS_TEST_PATH);
+  const canonicalQuery = canonicalizeS2sQuery(ADMINISTRA_BARRAGENS_TEST_QUERY);
+  return `${parsed.origin}${normalizedPath}?${canonicalQuery}`;
 }
 
 export function buildS2sV2BarragensTestCanonicalString(input: {
@@ -72,27 +64,16 @@ export function buildS2sV2BarragensTestCanonicalString(input: {
   timestamp: string;
   jti: string;
 }): string {
-  const keyId = assertSingleLineValue(input.keyId, 'CLASSIFICA_S2S_KID');
-  const timestamp = assertSingleLineValue(input.timestamp, 'timestamp');
-  if (!/^\d+$/.test(timestamp)) {
-    throw new Error('timestamp deve ser Unix em segundos.');
-  }
-  const jti = assertSingleLineValue(input.jti, 'jti');
-
-  const lines = [
-    S2S_V2_VERSION,
-    'GET',
-    ADMINISTRA_BARRAGENS_TEST_PATH,
-    ADMINISTRA_BARRAGENS_TEST_QUERY,
-    '',
-    EMPTY_BODY_SHA256,
-    keyId,
-    timestamp,
-    jti,
-    '|',
-  ];
-
-  return lines.join('\n');
+  return buildS2sV2CanonicalString({
+    method: 'GET',
+    path: ADMINISTRA_BARRAGENS_TEST_PATH,
+    query: ADMINISTRA_BARRAGENS_TEST_QUERY,
+    contentType: '',
+    bodySha256: EMPTY_BODY_SHA256,
+    keyId: input.keyId,
+    timestamp: input.timestamp,
+    jti: input.jti,
+  });
 }
 
 export function createAdministraS2sBarragensHeaders(params: {
@@ -106,30 +87,17 @@ export function createAdministraS2sBarragensHeaders(params: {
   timestamp: string;
   jti: string;
 } {
-  const timestamp =
-    params.timestamp ?? String(Math.floor(Date.now() / 1000));
-  const jti = params.jti ?? crypto.randomUUID();
-  const keyId = assertSingleLineValue(params.keyId, 'CLASSIFICA_S2S_KID');
-
-  const canonicalString = buildS2sV2BarragensTestCanonicalString({
-    keyId,
-    timestamp,
-    jti,
+  return createAdministraS2sHeaders({
+    method: 'GET',
+    path: ADMINISTRA_BARRAGENS_TEST_PATH,
+    query: ADMINISTRA_BARRAGENS_TEST_QUERY,
+    contentType: '',
+    bodySha256: EMPTY_BODY_SHA256,
+    keyId: params.keyId,
+    privateKeyPem: params.privateKeyPem,
+    timestamp: params.timestamp,
+    jti: params.jti,
   });
-  const signature = signS2sV2Canonical(canonicalString, params.privateKeyPem);
-
-  return {
-    canonicalString,
-    timestamp,
-    jti,
-    headers: {
-      'x-s2s-key-id': keyId,
-      'x-s2s-timestamp': timestamp,
-      'x-s2s-jti': jti,
-      'x-s2s-body-sha256': EMPTY_BODY_SHA256,
-      'x-s2s-signature': signature,
-    },
-  };
 }
 
 const FORBIDDEN_POLICY_DATA_KEYS = new Set([
