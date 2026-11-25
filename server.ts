@@ -9,7 +9,6 @@ import administraLeituraHandler from './api/administra-leitura.ts';
 import administraEscritaHandler from './api/administra-escrita.ts';
 import pendenciasHandler from './api/pendencias.ts';
 import solicitacoesVistoriaHandler from './api/solicitacoes-vistoria.ts';
-import administraS2sHealthHandler from './api/administra-s2s-health.ts';
 
 dotenv.config();
 
@@ -24,7 +23,6 @@ export interface ApiAppHandlers {
   administraEscrita?: RequestHandler;
   pendencias?: RequestHandler;
   solicitacoesVistoria?: RequestHandler;
-  administraS2sHealth?: RequestHandler;
 }
 
 export function createApiApp(handlers: ApiAppHandlers = {}) {
@@ -87,8 +85,6 @@ export function createApiApp(handlers: ApiAppHandlers = {}) {
     handlers.pendencias ?? ((req, res) => void pendenciasHandler(req, res));
   const handleVistoria =
     handlers.solicitacoesVistoria ?? ((req, res) => void solicitacoesVistoriaHandler(req, res));
-  const handleS2sHealth =
-    handlers.administraS2sHealth ?? ((req, res) => void administraS2sHealthHandler(req, res));
 
   app.all('/api/administra-leitura', handleLeitura);
   app.all('/api/administra-escrita', handleEscrita);
@@ -97,7 +93,6 @@ export function createApiApp(handlers: ApiAppHandlers = {}) {
   app.all('/api/solicitacoes-vistoria/:id', handleVistoria);
   app.all('/api/solicitacoes-vistoria/:id/observacao', handleVistoria);
   app.all('/api/solicitacoes-vistoria/:id/cancelar', handleVistoria);
-  app.all('/api/administra-s2s-health', handleS2sHealth);
 
   return app;
 }
