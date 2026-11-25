@@ -1895,4 +1895,445 @@ export async function fetchRtBarragensPage(
   };
 }
 
+export interface BarragemV2Dto {
+  id: string;
+  nome: string;
+  car: string | null;
+  uf: string | null;
+  municipio: string | null;
+  municipio_ibge: string | number | null;
+  empreendimento: string | null;
+  processo: string | null;
+  snisb: string | null;
+  curso_agua: string | null;
+  latitude: number | string | null;
+  longitude: number | string | null;
+  altura: number | string | null;
+  volume: number | string | null;
+  dano_potencial: string | null;
+  categoria_risco: string | null;
+  classificada_em: string | null;
+  situacao: string | null;
+  empreendedor_id: string | null;
+}
 
+export interface BarragensV2Pagination {
+  limit: number;
+  nextCursor: string | null;
+  hasMore: boolean;
+  total: number | null;
+}
+
+export interface BarragensV2PageResult {
+  ok: boolean;
+  data: BarragemV2Dto[];
+  maskingPolicy: 'masked' | null;
+  pagination: BarragensV2Pagination;
+  error?: AdministraReadError;
+}
+
+export interface FetchBarragensV2Deps {
+  getAccessToken?: () => Promise<string | null>;
+  fetchImpl?: typeof fetch;
+}
+
+const BARRAGENS_V2_DEFAULT_LIMIT = 25;
+const BARRAGENS_V2_MAX_LIMIT = 100;
+
+function isPlainV2Object(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function readOptionalV2String(value: unknown): { ok: true; value: string | null } | { ok: false } {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (typeof value === 'string') return { ok: true, value };
+  return { ok: false };
+}
+
+function readOptionalV2StringOrNumber(
+  value: unknown
+): { ok: true; value: string | number | null } | { ok: false } {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (typeof value === 'string') return { ok: true, value };
+  if (typeof value === 'number' && Number.isFinite(value)) return { ok: true, value };
+  return { ok: false };
+}
+
+function parseBarragemV2Dto(raw: unknown): BarragemV2Dto | null {
+  if (!isPlainV2Object(raw)) return null;
+  const id = raw.id;
+  const nome = raw.nome;
+  if (typeof id !== 'string' || !id.trim() || typeof nome !== 'string' || !nome.trim()) {
+    return null;
+  }
+
+  const car = readOptionalV2String(raw.car);
+  const uf = readOptionalV2String(raw.uf);
+  const municipio = readOptionalV2String(raw.municipio);
+  const municipioIbge = readOptionalV2StringOrNumber(raw.municipio_ibge);
+  const empreendimento = readOptionalV2String(raw.empreendimento);
+  const processo = readOptionalV2String(raw.processo);
+  const snisb = readOptionalV2String(raw.snisb);
+  const cursoAgua = readOptionalV2String(raw.curso_agua);
+  const latitude = readOptionalV2StringOrNumber(raw.latitude);
+  const longitude = readOptionalV2StringOrNumber(raw.longitude);
+  const altura = readOptionalV2StringOrNumber(raw.altura);
+  const volume = readOptionalV2StringOrNumber(raw.volume);
+  const danoPotencial = readOptionalV2String(raw.dano_potencial);
+  const categoriaRisco = readOptionalV2String(raw.categoria_risco);
+  const classificadaEm = readOptionalV2String(raw.classificada_em);
+  const situacao = readOptionalV2String(raw.situacao);
+  const empreendedorId = readOptionalV2String(raw.empreendedor_id);
+
+  if (
+    !car.ok ||
+    !uf.ok ||
+    !municipio.ok ||
+    !municipioIbge.ok ||
+    !empreendimento.ok ||
+    !processo.ok ||
+    !snisb.ok ||
+    !cursoAgua.ok ||
+    !latitude.ok ||
+    !longitude.ok ||
+    !altura.ok ||
+    !volume.ok ||
+    !danoPotencial.ok ||
+    !categoriaRisco.ok ||
+    !classificadaEm.ok ||
+    !situacao.ok ||
+    !empreendedorId.ok
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    nome,
+    car: car.value,
+    uf: uf.value,
+    municipio: municipio.value,
+    municipio_ibge: municipioIbge.value,
+    empreendimento: empreendimento.value,
+    processo: processo.value,
+    snisb: snisb.value,
+    curso_agua: cursoAgua.value,
+    latitude: latitude.value,
+    longitude: longitude.value,
+    altura: altura.value,
+    volume: volume.value,
+    dano_potencial: danoPotencial.value,
+    categoria_risco: categoriaRisco.value,
+    classificada_em: classificadaEm.value,
+    situacao: situacao.value,
+    empreendedor_id: empreendedorId.value,
+  };
+}
+
+function normalizeBarragensV2Limit(rawLimit?: number): number {
+  if (typeof rawLimit !== 'number' || !Number.isInteger(rawLimit)) {
+    return BARRAGENS_V2_DEFAULT_LIMIT;
+  }
+  return Math.max(1, Math.min(BARRAGENS_V2_MAX_LIMIT, rawLimit));
+}
+
+function emptyV2Pagination(limit: number): BarragensV2Pagination {
+  return {
+    limit,
+    nextCursor: null,
+    hasMore: false,
+    total: null,
+  };
+}
+
+export async function fetchBarragensV2Page(
+  params: { limit?: number; cursor?: string | null } = {},
+  deps: FetchBarragensV2Deps = {}
+): Promise<BarragensV2PageResult> {
+  const safeLimit = normalizeBarragensV2Limit(params.limit);
+  const rawCursor = params.cursor;
+  let cursor: string | undefined;
+
+  if (rawCursor !== undefined && rawCursor !== null && rawCursor !== '') {
+    if (
+      typeof rawCursor !== 'string' ||
+      rawCursor.length > 512 ||
+      /[\x00-\x1f\x7f\s]/.test(rawCursor)
+    ) {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError('Cursor de paginação inválido para consulta v2 de Barragens.', {
+          table: 'barragens',
+          status: 400,
+          code: 'INVALID_CURSOR',
+          isRlsOrPermission: false,
+        }),
+      };
+    }
+    cursor = rawCursor;
+  }
+
+  const resolveToken = deps.getAccessToken ?? getClassificaAccessToken;
+  const token = await resolveToken();
+  if (!token) {
+    return {
+      ok: false,
+      data: [],
+      maskingPolicy: null,
+      pagination: emptyV2Pagination(safeLimit),
+      error: buildClientError(
+        'Sessão autenticada do Classifica CSB obrigatória para consultar Barragens (v2).',
+        {
+          table: 'barragens',
+          status: 401,
+          code: 'AUTH_REQUIRED',
+          isRlsOrPermission: true,
+        }
+      ),
+    };
+  }
+
+  const requestPayload: { action: 'barragens_v2'; limit: number; cursor?: string } = cursor
+    ? { action: 'barragens_v2', limit: safeLimit, cursor }
+    : { action: 'barragens_v2', limit: safeLimit };
+
+  const fetchImpl = deps.fetchImpl ?? fetch;
+
+  try {
+    const response = await fetchImpl('/api/administra-leitura', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(requestPayload),
+    });
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(
+          `Endpoint /api/administra-leitura indisponível para leitura v2 de Barragens (HTTP ${response.status}).`,
+          {
+            table: 'barragens',
+            status: response.status,
+            code: 'ENDPOINT_UNAVAILABLE',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
+    let json: unknown;
+    try {
+      json = await response.json();
+    } catch {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(
+          `Resposta JSON inválida recebida de /api/administra-leitura (HTTP ${response.status}).`,
+          {
+            table: 'barragens',
+            status: response.status,
+            code: 'INVALID_RESPONSE',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
+    if (!isPlainV2Object(json) || !response.ok || json.ok !== true) {
+      const errObj = isPlainV2Object(json) && isPlainV2Object(json.error) ? json.error : null;
+      const errString =
+        isPlainV2Object(json) && typeof json.error === 'string' && json.error.trim()
+          ? json.error.trim().slice(0, 240)
+          : null;
+      const errCode =
+        (errObj && typeof errObj.code === 'string' ? errObj.code : undefined) ||
+        (isPlainV2Object(json) && typeof json.code === 'string' ? json.code : undefined);
+      const message =
+        (errObj && typeof errObj.userMessage === 'string' && errObj.userMessage.trim()) ||
+        (errObj && typeof errObj.message === 'string' && errObj.message.trim()) ||
+        errString ||
+        `Falha ao consultar Barragens v2 em /api/administra-leitura (HTTP ${response.status}).`;
+
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(message, {
+          table: 'barragens',
+          status: response.status,
+          code: errCode,
+        }),
+      };
+    }
+
+    if (json.maskingPolicy !== 'masked') {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(
+          'Resposta da consulta v2 de Barragens rejeitada: maskingPolicy obrigatório deve ser "masked".',
+          {
+            table: 'barragens',
+            status: response.status,
+            code: 'INVALID_MASKING_POLICY',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
+    if (!Array.isArray(json.items)) {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(
+          'Resposta da consulta v2 de Barragens em formato inválido.',
+          {
+            table: 'barragens',
+            status: response.status,
+            code: 'INVALID_RESPONSE_FORMAT',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
+    if (json.pagination !== undefined && !isPlainV2Object(json.pagination)) {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(
+          'Metadados de paginação inválidos na resposta v2 de Barragens.',
+          {
+            table: 'barragens',
+            status: response.status,
+            code: 'INVALID_PAGINATION',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
+    const pag = isPlainV2Object(json.pagination) ? json.pagination : {};
+    const parsedLimit =
+      typeof pag.limit === 'number' && Number.isInteger(pag.limit) && pag.limit >= 1
+        ? pag.limit
+        : safeLimit;
+    const rawNextCursor = pag.nextCursor;
+    if (rawNextCursor !== undefined && rawNextCursor !== null && typeof rawNextCursor !== 'string') {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(
+          'Cursor de próxima página inválido na resposta v2 de Barragens.',
+          {
+            table: 'barragens',
+            status: response.status,
+            code: 'INVALID_PAGINATION',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+    const nextCursor =
+      typeof rawNextCursor === 'string' && rawNextCursor.length > 0 ? rawNextCursor : null;
+    if (pag.hasMore !== undefined && typeof pag.hasMore !== 'boolean') {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(
+          'Indicador hasMore inválido na resposta v2 de Barragens.',
+          {
+            table: 'barragens',
+            status: response.status,
+            code: 'INVALID_PAGINATION',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+    const hasMore = typeof pag.hasMore === 'boolean' ? pag.hasMore : nextCursor !== null;
+    const total =
+      typeof pag.total === 'number' && Number.isInteger(pag.total) && pag.total >= 0
+        ? pag.total
+        : null;
+
+    const items: BarragemV2Dto[] = [];
+    for (const rawItem of json.items) {
+      const parsed = parseBarragemV2Dto(rawItem);
+      if (!parsed) {
+        return {
+          ok: false,
+          data: [],
+          maskingPolicy: null,
+          pagination: emptyV2Pagination(safeLimit),
+          error: buildClientError(
+            'Registro inválido recebido na consulta v2 de Barragens.',
+            {
+              table: 'barragens',
+              status: response.status,
+              code: 'INVALID_UPSTREAM_ITEM',
+              isRlsOrPermission: false,
+            }
+          ),
+        };
+      }
+      items.push(parsed);
+    }
+
+    return {
+      ok: true,
+      data: items,
+      maskingPolicy: 'masked',
+      pagination: {
+        limit: parsedLimit,
+        nextCursor,
+        hasMore,
+        total,
+      },
+    };
+  } catch {
+    return {
+      ok: false,
+      data: [],
+      maskingPolicy: null,
+      pagination: emptyV2Pagination(safeLimit),
+      error: buildClientError(
+        'Falha de comunicação ao consultar Barragens v2 em /api/administra-leitura.',
+        {
+          table: 'barragens',
+          code: 'NETWORK_ERROR',
+          isRlsOrPermission: false,
+        }
+      ),
+    };
+  }
+}

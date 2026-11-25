@@ -856,3 +856,480 @@ test('/api/administra-leitura action barragens_v2 falha fechado para maskingPoli
     );
   }
 });
+
+test('fetchBarragensV2Page realiza chamada autenticada para barragens_v2, preserva DTO v2 e navega por cursor sem repetir ou pular páginas', async () => {
+  const { fetchBarragensV2Page, fetchBarragensPage, searchBarragens } = await import(
+    '../src/services/administraService'
+  );
+  const { advanceBarragensV2Cursor, retreatBarragensV2Cursor } = await import(
+    '../components/EcosystemHub'
+  );
+
+  assert.equal(typeof fetchBarragensPage, 'function');
+  assert.equal(typeof searchBarragens, 'function');
+
+  // 1. Sem sessão autenticada -> falha fechado com 401
+  const unauth = await fetchBarragensV2Page(
+    { limit: 25 },
+    { getAccessToken: async () => null }
+  );
+  assert.equal(unauth.ok, false);
+  assert.equal(unauth.data.length, 0);
+  assert.equal(unauth.maskingPolicy, null);
+  assert.equal(unauth.error?.code, 'AUTH_REQUIRED');
+
+  // 2. Fluxo completo contra createAdministraLeituraHandler com 2 páginas via cursor
+  const { privateKey } = crypto.generateKeyPairSync('ed25519');
+  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+
+  const mockAdministra = http.createServer((req, res) => {
+    const parsedUrl = new URL(req.url || '/', 'http://127.0.0.1');
+    const cursor = parsedUrl.searchParams.get('cursor');
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('x-masking-policy', 'masked');
+
+    if (!cursor) {
+      res.end(
+        JSON.stringify({
+          maskingPolicy: 'masked',
+          pagination: {
+            limit: 25,
+            nextCursor: 'cursor-p2-opaco',
+            hasMore: true,
+            total: 2,
+          },
+          items: [
+            {
+              id: 'bar-v2-p1',
+              nome: 'Barragem Página 1',
+              uf: 'MT',
+              municipio: 'Cuiabá',
+              snisb: 'SNISB-01',
+              situacao: 'Ativa',
+              dano_potencial: 'Alto',
+              categoria_risco: 'Médio',
+              observacoes: 'Campo proibido não deve vazar',
+            },
+          ],
+        })
+      );
+      return;
+    }
+
+    assert.equal(cursor, 'cursor-p2-opaco');
+    res.end(
+      JSON.stringify({
+        maskingPolicy: 'masked',
+        pagination: {
+          limit: 25,
+          nextCursor: null,
+          hasMore: false,
+          total: 2,
+        },
+        items: [
+          {
+            id: 'bar-v2-p2',
+            nome: 'Barragem Página 2',
+            uf: 'MT',
+            municipio: 'Sinop',
+            snisb: null,
+            situacao: 'Inativa',
+            dano_potencial: 'Baixo',
+            categoria_risco: 'Baixo',
+          },
+        ],
+      })
+    );
+  });
+
+  await new Promise<void>((resolve) => {
+    mockAdministra.listen(0, '127.0.0.1', () => resolve());
+  });
+
+  const sentPayloads: Array<Record<string, unknown>> = [];
+  const sentAuthHeaders: Array<string | null> = [];
+
+  try {
+    const addr = mockAdministra.address();
+    assert.ok(addr && typeof addr !== 'string');
+    const mockBaseUrl = `http://127.0.0.1:${addr.port}`;
+
+    await withServer(
+      {
+        leituraDeps: {
+          verifySession: async (token) =>
+            token === 'session-jwt-teste'
+              ? {
+                  ok: true,
+                  userId: 'user-1',
+                  classificaUrl: 'https://classifica.example.supabase.co',
+                }
+              : {
+                  ok: false,
+                  status: 401,
+                  code: 'INVALID_SESSION',
+                  error: 'Sessão inválida.',
+                },
+          s2sEnv: {
+            ADMINISTRA_API_BASE_URL: mockBaseUrl,
+            CLASSIFICA_S2S_KID: 'classifica-ed25519-test',
+            CLASSIFICA_S2S_PRIVATE_KEY: privateKeyPem,
+          },
+        },
+      },
+      async (baseUrl) => {
+        const sentInputs: Array<string> = [];
+        const trackedFetch: typeof fetch = (input, init) => {
+          assert.equal(input, '/api/administra-leitura');
+          sentInputs.push(String(input));
+          const headers = new Headers(init?.headers);
+          sentAuthHeaders.push(headers.get('Authorization'));
+          sentPayloads.push(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>);
+          return fetch(`${baseUrl}/api/administra-leitura`, init);
+        };
+
+        let cursorState = { cursorHistory: [null] as Array<string | null>, cursorPageIndex: 0 };
+
+        // Página 1 (inclui tentativa indevida de sobrescrita de endpointUrl via cast -> deve ser ignorada)
+        const page1 = await fetchBarragensV2Page(
+          { limit: 25, cursor: cursorState.cursorHistory[cursorState.cursorPageIndex] },
+          {
+            getAccessToken: async () => 'session-jwt-teste',
+            fetchImpl: trackedFetch,
+            ...({ endpointUrl: 'https://evil.example/leak' } as Record<string, unknown>),
+          }
+        );
+
+        assert.equal(page1.ok, true);
+        assert.equal(page1.maskingPolicy, 'masked');
+        assert.equal(page1.data.length, 1);
+        assert.equal(page1.data[0].id, 'bar-v2-p1');
+        assert.equal(page1.data[0].nome, 'Barragem Página 1');
+        assert.equal(page1.data[0].car, null);
+        assert.equal('observacoes' in page1.data[0], false);
+        assert.deepEqual(sentPayloads[0], { action: 'barragens_v2', limit: 25 });
+        assert.equal(sentAuthHeaders[0], 'Bearer session-jwt-teste');
+        assert.equal(sentInputs[0], '/api/administra-leitura');
+
+        // Avança para Página 2 usando cursor retornado
+        cursorState = advanceBarragensV2Cursor(cursorState, page1.pagination);
+        assert.equal(cursorState.cursorPageIndex, 1);
+        assert.equal(cursorState.cursorHistory[1], 'cursor-p2-opaco');
+
+        const page2 = await fetchBarragensV2Page(
+          { limit: 25, cursor: cursorState.cursorHistory[cursorState.cursorPageIndex] },
+          {
+            getAccessToken: async () => 'session-jwt-teste',
+            fetchImpl: trackedFetch,
+          }
+        );
+
+        assert.equal(page2.ok, true);
+        assert.equal(page2.data[0].id, 'bar-v2-p2');
+        assert.equal(page2.data[0].snisb, null);
+        assert.equal(page2.pagination.hasMore, false);
+        assert.equal(page2.pagination.nextCursor, null);
+        assert.deepEqual(sentPayloads[1], {
+          action: 'barragens_v2',
+          limit: 25,
+          cursor: 'cursor-p2-opaco',
+        });
+
+        // Próxima quando hasMore=false não altera estado
+        const noAdvance = advanceBarragensV2Cursor(cursorState, page2.pagination);
+        assert.deepEqual(noAdvance, cursorState);
+
+        // Volta para Página 1 usando histórico de cursor
+        cursorState = retreatBarragensV2Cursor(cursorState);
+        assert.equal(cursorState.cursorPageIndex, 0);
+        assert.equal(cursorState.cursorHistory[cursorState.cursorPageIndex], null);
+
+        const backToPage1 = await fetchBarragensV2Page(
+          { limit: 25, cursor: cursorState.cursorHistory[cursorState.cursorPageIndex] },
+          {
+            getAccessToken: async () => 'session-jwt-teste',
+            fetchImpl: trackedFetch,
+          }
+        );
+        assert.equal(backToPage1.ok, true);
+        assert.equal(backToPage1.data[0].id, 'bar-v2-p1');
+        assert.deepEqual(sentPayloads[2], { action: 'barragens_v2', limit: 25 });
+      }
+    );
+  } finally {
+    mockAdministra.closeAllConnections?.();
+    await new Promise<void>((resolve, reject) => {
+      mockAdministra.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
+});
+
+test('fetchBarragensV2Page rejeita maskingPolicy diferente de masked e trata erro de endpoint/rede sem vazar token ou cursor', async () => {
+  const { fetchBarragensV2Page } = await import('../src/services/administraService');
+
+  // maskingPolicy inválido -> falha fechado
+  const unmasked = await fetchBarragensV2Page(
+    { limit: 25, cursor: 'CURSOR_SECRETO_123' },
+    {
+      getAccessToken: async () => 'TOKEN_SECRETO_XYZ',
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            maskingPolicy: 'unmasked',
+            pagination: { limit: 25, nextCursor: null, hasMore: false, total: 1 },
+            items: [{ id: 'bar-leak', nome: 'Não Deve Aparecer' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        ),
+    }
+  );
+  assert.equal(unmasked.ok, false);
+  assert.equal(unmasked.maskingPolicy, null);
+  assert.equal(unmasked.data.length, 0);
+  assert.equal(unmasked.error?.code, 'INVALID_MASKING_POLICY');
+
+  // Erro de rede contendo valores sensíveis -> mensagem sanitizada
+  const networkErr = await fetchBarragensV2Page(
+    { limit: 25, cursor: 'CURSOR_SECRETO_123' },
+    {
+      getAccessToken: async () => 'TOKEN_SECRETO_XYZ',
+      fetchImpl: async () => {
+        throw new Error('ECONNREFUSED TOKEN_SECRETO_XYZ CURSOR_SECRETO_123');
+      },
+    }
+  );
+  assert.equal(networkErr.ok, false);
+  assert.equal(networkErr.data.length, 0);
+  assert.equal(networkErr.maskingPolicy, null);
+  assert.equal(networkErr.error?.userMessage.includes('TOKEN_SECRETO_XYZ'), false);
+  assert.equal(networkErr.error?.userMessage.includes('CURSOR_SECRETO_123'), false);
+
+  // Erro HTTP 502 do endpoint -> falha fechado
+  const upstreamFail = await fetchBarragensV2Page(
+    { limit: 25 },
+    {
+      getAccessToken: async () => 'TOKEN_SECRETO_XYZ',
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            ok: false,
+            code: 'ADMINISTRA_V2_UPSTREAM_ERROR',
+            error: 'O serviço Administra v2 recusou ou falhou ao processar a consulta.',
+          }),
+          { status: 502, headers: { 'Content-Type': 'application/json' } }
+        ),
+    }
+  );
+  assert.equal(upstreamFail.ok, false);
+  assert.equal(upstreamFail.data.length, 0);
+  assert.equal(upstreamFail.error?.status, 502);
+});
+
+test('EcosystemHub aba Barragens renderiza DTO v2 mascarado sem bloqueio pelo aviso legado, desabilita busca textual e distingue erro de lista vazia', async () => {
+  const React = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { EcosystemHub } = await import('../components/EcosystemHub');
+  const { AuthContext } = await import('../src/contexts/AuthContext');
+  const { DataContext } = await import('../src/contexts/DataContext');
+
+  const wrap = (element: React.ReactElement) =>
+    React.createElement(
+      AuthContext.Provider,
+      {
+        value: {
+          currentUser: {
+            id: 'admin-1',
+            authUserId: 'auth-admin-1',
+            username: 'admin.teste',
+            name: 'Admin Teste',
+            email: 'admin@classifica.test',
+            role: 'Administrador',
+            active: true,
+            forcePasswordChange: false,
+          },
+          login: async () => ({ success: false }),
+          logout: async () => {},
+          loading: false,
+          refreshProfile: async () => {},
+        },
+      },
+      React.createElement(
+        DataContext.Provider,
+        {
+          value: {
+            pareceres: [],
+            oficios: [],
+            noObligatoriedades: [],
+            indeferimentos: [],
+            transferencias: [],
+            documents: [],
+            loading: false,
+            refreshData: async () => {},
+            deleteParecer: async () => ({ success: false }),
+            deleteOficio: async () => ({ success: false }),
+            deleteNoObligatoriedade: async () => ({ success: false }),
+            deleteIndeferimento: async () => ({ success: false }),
+            deleteTransferencia: async () => ({ success: false }),
+          },
+        },
+        element
+      )
+    );
+
+  // 1. Lista v2 mascarada renderiza mesmo com erro/ausência de RPCs legadas (serverConfigured === false)
+  const maskedHtml = renderToStaticMarkup(
+    wrap(
+      React.createElement(EcosystemHub, {
+        initialTab: 'barragens',
+        initialLegacyDiagnosticsState: {
+          serverConfigured: false,
+          diagnosticsError: {
+            status: 503,
+            code: 'ADMINISTRA_SERVER_CONFIG_MISSING',
+            message: 'ADMINISTRA_SUPABASE_URL ausente.',
+            userMessage: 'Configuração legada ausente.',
+            isRlsOrPermission: false,
+          },
+          skipInitialDiagnostics: true,
+        },
+        initialBarragensV2State: {
+          maskingPolicy: 'masked',
+          limit: 25,
+          cursorHistory: [null],
+          cursorPageIndex: 0,
+          pagination: {
+            limit: 25,
+            nextCursor: 'CURSOR_OPACO_SECRETO',
+            hasMore: true,
+            total: 12,
+          },
+          items: [
+            {
+              id: 'bar-v2-ui-1',
+              nome: 'Barragem UI Piloto',
+              car: null,
+              uf: 'MT',
+              municipio: 'Cuiabá',
+              municipio_ibge: '5103403',
+              empreendimento: 'UHE Teste',
+              processo: 'PROC-01',
+              snisb: 'SNISB-123',
+              curso_agua: 'Rio Cuiabá',
+              latitude: -15.6,
+              longitude: -56.09,
+              altura: 20,
+              volume: 500000,
+              dano_potencial: 'Alto',
+              categoria_risco: 'Médio',
+              classificada_em: '2026-01-10',
+              situacao: 'Ativa',
+              empreendedor_id: 'emp-1',
+            },
+          ],
+          skipInitialFetch: true,
+        },
+      })
+    )
+  );
+
+  // Aviso global legado preservado, mas sem bloquear a listagem v2 nem sua paginação
+  assert.equal(
+    maskedHtml.includes('Leitura canônica server-side do Administra Barragens indisponível'),
+    true
+  );
+  assert.equal(maskedHtml.includes('Barragem UI Piloto'), true);
+  assert.equal(maskedHtml.includes('SNISB-123'), true);
+  assert.equal(maskedHtml.includes('Busca textual indisponível na fonte v2 de Barragens'), true);
+  assert.equal(maskedHtml.includes('disabled=""'), true);
+  assert.equal(maskedHtml.includes('Página 1'), true);
+  assert.equal(maskedHtml.includes('Próxima'), true);
+  assert.equal(maskedHtml.includes('CURSOR_OPACO_SECRETO'), false);
+
+  // 2. Erro na ação barragens_v2 não deve parecer lista vazia
+  const errorHtml = renderToStaticMarkup(
+    wrap(
+      React.createElement(EcosystemHub, {
+        initialTab: 'barragens',
+        initialLegacyDiagnosticsState: { skipInitialDiagnostics: true },
+        initialBarragensV2State: {
+          maskingPolicy: null,
+          items: [],
+          error: {
+            table: 'barragens',
+            code: 'ADMINISTRA_V2_UPSTREAM_ERROR',
+            message: 'Falha segura v2',
+            userMessage: 'Serviço Administra v2 indisponível no momento.',
+            isRlsOrPermission: false,
+          },
+          skipInitialFetch: true,
+        },
+      })
+    )
+  );
+  assert.equal(errorHtml.includes('Erro ao consultar Barragens (v2)'), true);
+  assert.equal(errorHtml.includes('Serviço Administra v2 indisponível no momento.'), true);
+  assert.equal(errorHtml.includes('Nenhuma barragem retornada pela consulta v2 de Barragens.'), false);
+
+  // 3. maskingPolicy diferente de "masked" nunca exibe registros
+  const unmaskedHtml = renderToStaticMarkup(
+    wrap(
+      React.createElement(EcosystemHub, {
+        initialTab: 'barragens',
+        initialLegacyDiagnosticsState: { skipInitialDiagnostics: true },
+        initialBarragensV2State: {
+          maskingPolicy: null,
+          items: [
+            {
+              id: 'bar-secret',
+              nome: 'Barragem Secreta Sem Mascara',
+              car: null,
+              uf: null,
+              municipio: null,
+              municipio_ibge: null,
+              empreendimento: null,
+              processo: null,
+              snisb: null,
+              curso_agua: null,
+              latitude: null,
+              longitude: null,
+              altura: null,
+              volume: null,
+              dano_potencial: null,
+              categoria_risco: null,
+              classificada_em: null,
+              situacao: null,
+              empreendedor_id: null,
+            },
+          ],
+          skipInitialFetch: true,
+        },
+      })
+    )
+  );
+  assert.equal(unmaskedHtml.includes('Barragem Secreta Sem Mascara'), false);
+  assert.equal(
+    unmaskedHtml.includes('Leitura v2 de Barragens bloqueada por política de mascaramento'),
+    true
+  );
+
+  // 4. Lista genuinamente vazia (ok + masked + 0 itens) exibe mensagem de lista vazia
+  const emptyHtml = renderToStaticMarkup(
+    wrap(
+      React.createElement(EcosystemHub, {
+        initialTab: 'barragens',
+        initialLegacyDiagnosticsState: { skipInitialDiagnostics: true },
+        initialBarragensV2State: {
+          maskingPolicy: 'masked',
+          items: [],
+          pagination: { limit: 25, nextCursor: null, hasMore: false, total: 0 },
+          skipInitialFetch: true,
+        },
+      })
+    )
+  );
+  assert.equal(emptyHtml.includes('Nenhuma barragem retornada pela consulta v2 de Barragens.'), true);
+  assert.equal(emptyHtml.includes('Erro ao consultar Barragens (v2)'), false);
+});
+

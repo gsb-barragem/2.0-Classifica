@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Building2,
@@ -32,10 +32,11 @@ import {
   AdministraRecord,
   AdministraRpcName,
   AdministraTableDiagnostic,
-  BarragemWithRelations,
+  BarragemV2Dto,
+  BarragensV2Pagination,
   checkAdministraCanonicalAccess,
   EmpreendedorWithRelations,
-  fetchBarragensPage,
+  fetchBarragensV2Page,
   fetchEmpreendedoresPage,
   fetchRtBarragensPage,
   fetchRtsPage,
@@ -181,22 +182,6 @@ function getSummaryEntries(
   }
   return entries;
 }
-
-const COORD_EXCLUDE_PATTERNS: RegExp[] = [
-  /^lat$/i,
-  /^lat_gms$/i,
-  /^lat_decimal$/i,
-  /^latitude$/i,
-  /^latitude_gms$/i,
-  /^latitude_decimal$/i,
-  /^long$/i,
-  /^lng$/i,
-  /^long_gms$/i,
-  /^long_decimal$/i,
-  /^longitude$/i,
-  /^longitude_gms$/i,
-  /^longitude_decimal$/i,
-];
 
 function getBarragemCoordinatesGMS(bar: AdministraRecord | null | undefined): {
   lat: string;
@@ -346,10 +331,70 @@ function extractDamClassification(bar: AdministraRecord, localDocs: AppDocument[
   };
 }
 
-export const EcosystemHub: React.FC = () => {
+export interface BarragensV2CursorState {
+  cursorHistory: Array<string | null>;
+  cursorPageIndex: number;
+}
+
+export function advanceBarragensV2Cursor(
+  state: BarragensV2CursorState,
+  pagination: Pick<BarragensV2Pagination, 'hasMore' | 'nextCursor'>
+): BarragensV2CursorState {
+  if (!pagination.hasMore || !pagination.nextCursor) {
+    return state;
+  }
+  const currentCursor = state.cursorHistory[state.cursorPageIndex] ?? null;
+  if (pagination.nextCursor === currentCursor) {
+    return state;
+  }
+  const nextIndex = state.cursorPageIndex + 1;
+  const prefix = state.cursorHistory.slice(0, nextIndex);
+  return {
+    cursorHistory: [...prefix, pagination.nextCursor],
+    cursorPageIndex: nextIndex,
+  };
+}
+
+export function retreatBarragensV2Cursor(state: BarragensV2CursorState): BarragensV2CursorState {
+  if (state.cursorPageIndex <= 0) {
+    return state;
+  }
+  return {
+    ...state,
+    cursorPageIndex: state.cursorPageIndex - 1,
+  };
+}
+
+export interface EcosystemHubProps {
+  initialTab?: HubTab;
+  initialBarragensV2State?: {
+    items?: BarragemV2Dto[];
+    loading?: boolean;
+    error?: AdministraReadError | null;
+    maskingPolicy?: 'masked' | null;
+    pagination?: BarragensV2Pagination;
+    limit?: number;
+    cursorHistory?: Array<string | null>;
+    cursorPageIndex?: number;
+    skipInitialFetch?: boolean;
+  };
+  initialLegacyDiagnosticsState?: {
+    serverConfigured?: boolean | null;
+    diagnosticsError?: AdministraReadError | null;
+    skipInitialDiagnostics?: boolean;
+  };
+}
+
+const DEFAULT_BARRAGENS_V2_LIMIT = 25;
+
+export const EcosystemHub: React.FC<EcosystemHubProps> = ({
+  initialTab = 'empreendedores',
+  initialBarragensV2State,
+  initialLegacyDiagnosticsState,
+} = {}) => {
   const { documents } = useContext(DataContext);
 
-  const [activeTab, setActiveTab] = useState<HubTab>('empreendedores');
+  const [activeTab, setActiveTab] = useState<HubTab>(initialTab);
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -357,18 +402,53 @@ export const EcosystemHub: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
-  const [serverConfigured, setServerConfigured] = useState<boolean | null>(null);
+  const [serverConfigured, setServerConfigured] = useState<boolean | null>(
+    initialLegacyDiagnosticsState?.serverConfigured ?? null
+  );
   const [diagnostics, setDiagnostics] = useState<AdministraTableDiagnostic[]>([]);
-  const [diagnosticsError, setDiagnosticsError] = useState<AdministraReadError | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<AdministraReadError | null>(
+    initialLegacyDiagnosticsState?.diagnosticsError ?? null
+  );
   const [activeError, setActiveError] = useState<AdministraReadError | null>(null);
   const [relationErrors, setRelationErrors] = useState<AdministraReadError[]>([]);
 
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [empreendedores, setEmpreendedores] = useState<EmpreendedorWithRelations[]>([]);
-  const [barragens, setBarragens] = useState<BarragemWithRelations[]>([]);
   const [rts, setRts] = useState<RtWithRelations[]>([]);
   const [vinculos, setVinculos] = useState<VinculoRtBarragemWithRelations[]>([]);
+
+  const initialV2Limit = initialBarragensV2State?.limit ?? DEFAULT_BARRAGENS_V2_LIMIT;
+  const [barragensV2, setBarragensV2] = useState<BarragemV2Dto[]>(
+    initialBarragensV2State?.items ?? []
+  );
+  const [barragensV2Loading, setBarragensV2Loading] = useState<boolean>(
+    initialBarragensV2State?.loading ?? false
+  );
+  const [barragensV2Error, setBarragensV2Error] = useState<AdministraReadError | null>(
+    initialBarragensV2State?.error ?? null
+  );
+  const [barragensV2MaskingPolicy, setBarragensV2MaskingPolicy] = useState<'masked' | null>(
+    initialBarragensV2State?.maskingPolicy ?? null
+  );
+  const [barragensV2Limit, setBarragensV2Limit] = useState<number>(initialV2Limit);
+  const [barragensV2Pagination, setBarragensV2Pagination] = useState<BarragensV2Pagination>(
+    initialBarragensV2State?.pagination ?? {
+      limit: initialV2Limit,
+      nextCursor: null,
+      hasMore: false,
+      total: null,
+    }
+  );
+  const [cursorState, setCursorState] = useState<BarragensV2CursorState>({
+    cursorHistory: initialBarragensV2State?.cursorHistory ?? [null],
+    cursorPageIndex: initialBarragensV2State?.cursorPageIndex ?? 0,
+  });
+  const barragensV2RequestIdRef = useRef(0);
+  const skipInitialV2FetchRef = useRef(Boolean(initialBarragensV2State?.skipInitialFetch));
+  const skipInitialDiagnosticsRef = useRef(
+    Boolean(initialLegacyDiagnosticsState?.skipInitialDiagnostics)
+  );
 
   const { currentUser } = useContext(AuthContext);
   const [vistoriaPrefill, setVistoriaPrefill] = useState<SolicitacaoVistoriaPrefill | null>(null);
@@ -479,7 +559,12 @@ export const EcosystemHub: React.FC = () => {
   );
 
   const ecosystemStatus = useMemo(() => {
-    const base = getEcosystemStatus();
+    let base: ReturnType<typeof getEcosystemStatus> = [];
+    try {
+      base = getEcosystemStatus();
+    } catch {
+      base = [];
+    }
     return base.map((sys) =>
       sys.id === 'ADMINISTRA_BARRAGENS' && serverConfigured !== null
         ? { ...sys, configured: serverConfigured }
@@ -510,7 +595,7 @@ export const EcosystemHub: React.FC = () => {
   }, []);
 
   const loadActiveTabData = useCallback(async () => {
-    if (activeTab === 'produtos') {
+    if (activeTab === 'produtos' || activeTab === 'barragens') {
       setActiveError(null);
       setRelationErrors([]);
       return;
@@ -525,14 +610,6 @@ export const EcosystemHub: React.FC = () => {
         const res = await fetchEmpreendedoresPage(page, pageSize, debouncedSearch);
         setServerConfigured((prev) => (res.configured ? true : prev === null ? false : prev));
         setEmpreendedores(res.data);
-        setTotalCount(res.total);
-        setHasMore(res.hasMore);
-        setActiveError(res.error || null);
-        setRelationErrors(res.relationErrors || []);
-      } else if (activeTab === 'barragens') {
-        const res = await fetchBarragensPage(page, pageSize, debouncedSearch);
-        setServerConfigured((prev) => (res.configured ? true : prev === null ? false : prev));
-        setBarragens(res.data);
         setTotalCount(res.total);
         setHasMore(res.hasMore);
         setActiveError(res.error || null);
@@ -559,7 +636,60 @@ export const EcosystemHub: React.FC = () => {
     }
   }, [activeTab, debouncedSearch, page, pageSize]);
 
+  const currentV2Cursor = cursorState.cursorHistory[cursorState.cursorPageIndex] ?? null;
+
+  const loadBarragensV2 = useCallback(async () => {
+    const requestId = ++barragensV2RequestIdRef.current;
+    setBarragensV2Loading(true);
+    setBarragensV2Error(null);
+
+    try {
+      const res = await fetchBarragensV2Page({
+        limit: barragensV2Limit,
+        cursor: currentV2Cursor,
+      });
+      if (requestId !== barragensV2RequestIdRef.current) {
+        return;
+      }
+
+      if (!res.ok || res.maskingPolicy !== 'masked') {
+        setBarragensV2([]);
+        setBarragensV2MaskingPolicy(null);
+        setBarragensV2Pagination({
+          limit: barragensV2Limit,
+          nextCursor: null,
+          hasMore: false,
+          total: null,
+        });
+        setBarragensV2Error(
+          res.error || {
+            table: 'barragens',
+            code: 'INVALID_MASKING_POLICY',
+            message: 'Falha ao validar política de mascaramento da leitura v2 de Barragens.',
+            userMessage:
+              'Falha ao consultar Barragens (v2) com política de mascaramento "masked".',
+            isRlsOrPermission: false,
+          }
+        );
+        return;
+      }
+
+      setBarragensV2(res.data);
+      setBarragensV2MaskingPolicy('masked');
+      setBarragensV2Pagination(res.pagination);
+      setBarragensV2Error(null);
+    } finally {
+      if (requestId === barragensV2RequestIdRef.current) {
+        setBarragensV2Loading(false);
+      }
+    }
+  }, [barragensV2Limit, currentV2Cursor]);
+
   useEffect(() => {
+    if (skipInitialDiagnosticsRef.current) {
+      skipInitialDiagnosticsRef.current = false;
+      return;
+    }
     void loadDiagnostics();
   }, [loadDiagnostics]);
 
@@ -567,9 +697,22 @@ export const EcosystemHub: React.FC = () => {
     void loadActiveTabData();
   }, [loadActiveTabData]);
 
+  useEffect(() => {
+    if (activeTab !== 'barragens') return;
+    if (skipInitialV2FetchRef.current) {
+      skipInitialV2FetchRef.current = false;
+      return;
+    }
+    void loadBarragensV2();
+  }, [activeTab, loadBarragensV2]);
+
   const handleRefreshAll = () => {
     void loadDiagnostics();
-    void loadActiveTabData();
+    if (activeTab === 'barragens') {
+      void loadBarragensV2();
+    } else {
+      void loadActiveTabData();
+    }
   };
 
   const handleTabChange = (tab: HubTab) => {
@@ -577,6 +720,10 @@ export const EcosystemHub: React.FC = () => {
     setPage(1);
     setActiveError(null);
     setRelationErrors([]);
+    if (tab === 'barragens') {
+      setBarragensV2Error(null);
+      setCursorState({ cursorHistory: [null], cursorPageIndex: 0 });
+    }
   };
 
   const localProductSummaries = useMemo<ProdutoEcossistemaResumo[]>(() => {
@@ -595,11 +742,10 @@ export const EcosystemHub: React.FC = () => {
 
   const currentItemsCount = useMemo(() => {
     if (activeTab === 'empreendedores') return empreendedores.length;
-    if (activeTab === 'barragens') return barragens.length;
     if (activeTab === 'rts') return rts.length;
     if (activeTab === 'vinculos') return vinculos.length;
     return 0;
-  }, [activeTab, barragens.length, empreendedores.length, rts.length, vinculos.length]);
+  }, [activeTab, empreendedores.length, rts.length, vinculos.length]);
 
   const totalPages = typeof totalCount === 'number' ? Math.max(1, Math.ceil(totalCount / pageSize)) : null;
   const canGoNext = totalPages !== null ? page < totalPages : hasMore;
@@ -634,10 +780,13 @@ export const EcosystemHub: React.FC = () => {
         </div>
         <button
           onClick={handleRefreshAll}
-          disabled={loading || diagnosticsLoading}
+          disabled={loading || barragensV2Loading || diagnosticsLoading}
           className="px-5 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-700 flex items-center gap-2 hover:bg-slate-50 shadow-sm self-start disabled:opacity-50"
         >
-          <RefreshCw size={16} className={loading || diagnosticsLoading ? 'animate-spin' : ''} />
+          <RefreshCw
+            size={16}
+            className={loading || barragensV2Loading || diagnosticsLoading ? 'animate-spin' : ''}
+          />
           Atualizar Consulta
         </button>
       </div>
@@ -778,7 +927,11 @@ export const EcosystemHub: React.FC = () => {
           },
           {
             id: 'barragens' as HubTab,
-            label: `Barragens${countBadgeForTable('barragens')}`,
+            label: `Barragens${
+              typeof barragensV2Pagination.total === 'number'
+                ? ` (${barragensV2Pagination.total})`
+                : ''
+            }`,
             icon: <Building2 size={16} />,
           },
           {
@@ -813,59 +966,106 @@ export const EcosystemHub: React.FC = () => {
       </div>
 
       {/* Barra de busca (consulta no servidor do Administra) e tamanho da página */}
-      <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
-        <div className="relative flex-1 max-w-lg">
-          <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="search"
-            placeholder={
-              activeTab === 'produtos'
-                ? 'Filtrar produtos locais do Classifica...'
-                : `Buscar no Administra (${TAB_TO_RPC[activeTab]})...`
-            }
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            className="w-full pl-10 pr-10 py-2.5 bg-white border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-          />
-          {searchInput && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchInput('');
-                setDebouncedSearch('');
-                setPage(1);
+      <div className="space-y-2">
+        <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+          <div className="relative flex-1 max-w-lg">
+            <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              disabled={activeTab === 'barragens'}
+              placeholder={
+                activeTab === 'produtos'
+                  ? 'Filtrar produtos locais do Classifica...'
+                  : activeTab === 'barragens'
+                  ? 'Busca textual indisponível na fonte v2 de Barragens'
+                  : `Buscar no Administra (${TAB_TO_RPC[activeTab]})...`
+              }
+              value={activeTab === 'barragens' ? '' : searchInput}
+              onChange={(e) => {
+                if (activeTab === 'barragens') return;
+                setSearchInput(e.target.value);
               }}
-              aria-label="Limpar busca"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
-            >
-              <X size={16} />
-            </button>
+              className={`w-full pl-10 pr-10 py-2.5 border border-slate-200 rounded-xl text-sm outline-none ${
+                activeTab === 'barragens'
+                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  : 'bg-white focus:ring-2 focus:ring-emerald-500'
+              }`}
+            />
+            {activeTab !== 'barragens' && searchInput && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchInput('');
+                  setDebouncedSearch('');
+                  setPage(1);
+                }}
+                aria-label="Limpar busca"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+              >
+                <X size={16} />
+              </button>
+            )}
+          </div>
+
+          {activeTab === 'barragens' ? (
+            <div className="flex items-center gap-2 text-xs text-slate-600">
+              <span className="font-semibold">Itens por página:</span>
+              <select
+                aria-label="Itens por página (Barragens v2)"
+                value={barragensV2Limit}
+                onChange={(e) => {
+                  const nextLimit = Number(e.target.value);
+                  setBarragensV2Limit(nextLimit);
+                  setCursorState({ cursorHistory: [null], cursorPageIndex: 0 });
+                  setBarragensV2Pagination({
+                    limit: nextLimit,
+                    nextCursor: null,
+                    hasMore: false,
+                    total: null,
+                  });
+                }}
+                className="px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                {[10, 25, 50, 100].map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            activeTab !== 'produtos' && (
+              <div className="flex items-center gap-2 text-xs text-slate-600">
+                <span className="font-semibold">Itens por página:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(1);
+                  }}
+                  className="px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  {[10, 15, 25, 50].map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )
           )}
         </div>
 
-        {activeTab !== 'produtos' && (
-          <div className="flex items-center gap-2 text-xs text-slate-600">
-            <span className="font-semibold">Itens por página:</span>
-            <select
-              value={pageSize}
-              onChange={(e) => {
-                setPageSize(Number(e.target.value));
-                setPage(1);
-              }}
-              className="px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500"
-            >
-              {[10, 15, 25, 50].map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </div>
+        {activeTab === 'barragens' && (
+          <p className="text-xs text-slate-500 flex items-center gap-1.5">
+            <Info size={13} className="text-slate-400 shrink-0" />
+            Busca textual ainda não está disponível nesta fonte v2 de Barragens. Utilize a paginação por cursor (Anterior / Próxima).
+          </p>
         )}
       </div>
 
       {/* Erros parciais ao resolver relações */}
-      {activeTab !== 'produtos' && !activeError && relationErrors.length > 0 && (
+      {activeTab !== 'produtos' && activeTab !== 'barragens' && !activeError && relationErrors.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 text-xs text-amber-900">
           <AlertTriangle className="text-amber-600 shrink-0 mt-0.5" size={18} />
           <div className="space-y-1">
@@ -879,7 +1079,167 @@ export const EcosystemHub: React.FC = () => {
 
       {/* Conteúdo Principal */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        {activeTab !== 'produtos' && loading ? (
+        {activeTab === 'barragens' ? (
+          barragensV2Loading ? (
+            <div className="py-16 text-center text-slate-500 space-y-3">
+              <Loader2 className="animate-spin mx-auto text-emerald-600" size={32} />
+              <p className="text-sm font-semibold">
+                Consultando <code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">barragens_v2</code> no Administra Barragens...
+              </p>
+            </div>
+          ) : barragensV2Error ? (
+            <div className="p-8 text-center space-y-3">
+              <ShieldAlert className="mx-auto text-red-500" size={36} />
+              <h3 className="text-base font-black text-slate-900">
+                Erro ao consultar Barragens (v2)
+              </h3>
+              <p className="text-sm text-red-700 max-w-2xl mx-auto">{barragensV2Error.userMessage}</p>
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => void loadBarragensV2()}
+                  className="px-4 py-2 text-xs font-bold bg-slate-900 text-white rounded-xl hover:bg-slate-800"
+                >
+                  Tentar novamente
+                </button>
+              </div>
+            </div>
+          ) : barragensV2MaskingPolicy !== 'masked' ? (
+            <div className="p-8 text-center space-y-3">
+              <ShieldAlert className="mx-auto text-red-500" size={36} />
+              <h3 className="text-base font-black text-slate-900">
+                Leitura v2 de Barragens bloqueada por política de mascaramento
+              </h3>
+              <p className="text-sm text-red-700 max-w-2xl mx-auto">
+                Os registros só podem ser exibidos quando maskingPolicy for exatamente "masked".
+              </p>
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => void loadBarragensV2()}
+                  className="px-4 py-2 text-xs font-bold bg-slate-900 text-white rounded-xl hover:bg-slate-800"
+                >
+                  Tentar novamente
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[920px]">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500 text-xs uppercase font-bold">
+                    <th className="px-5 py-4 border-b">Barragem (v2)</th>
+                    <th className="px-5 py-4 border-b">Identificadores</th>
+                    <th className="px-5 py-4 border-b">Localização & Hidrografia</th>
+                    <th className="px-5 py-4 border-b">Classificação & Dimensões</th>
+                    <th className="px-5 py-4 border-b text-right">Detalhes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {barragensV2.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
+                        Nenhuma barragem retornada pela consulta v2 de Barragens.
+                      </td>
+                    </tr>
+                  ) : (
+                    barragensV2.map((dam) => (
+                      <tr key={dam.id} className="hover:bg-slate-50/70 align-top">
+                        <td className="px-5 py-4">
+                          <div className="font-bold text-slate-800">{dam.nome}</div>
+                          <div className="text-[11px] font-mono text-slate-400 mt-0.5">{dam.id}</div>
+                          {dam.empreendimento && (
+                            <div className="text-xs text-slate-600 mt-1">
+                              <span className="text-slate-400">Empreendimento:</span> {dam.empreendimento}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-5 py-4 text-xs text-slate-600 space-y-1">
+                          <div>
+                            <span className="text-slate-400">SNISB:</span>{' '}
+                            <span className="font-mono">{formatCellValue(dam.snisb)}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Processo:</span>{' '}
+                            <span className="font-mono">{formatCellValue(dam.processo)}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">CAR:</span>{' '}
+                            <span className="font-mono">{formatCellValue(dam.car)}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Empreendedor ID:</span>{' '}
+                            <span className="font-mono">{formatCellValue(dam.empreendedor_id)}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4 text-xs text-slate-600 space-y-1">
+                          <div className="font-semibold text-slate-800">
+                            {dam.municipio || '—'}
+                            {dam.uf ? ` / ${dam.uf}` : ''}
+                          </div>
+                          <div>
+                            <span className="text-slate-400">IBGE:</span>{' '}
+                            <span className="font-mono">{formatCellValue(dam.municipio_ibge)}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Curso d&apos;água:</span>{' '}
+                            {formatCellValue(dam.curso_agua)}
+                          </div>
+                          <div className="font-mono text-slate-700">
+                            <span className="font-sans text-slate-400">Lat/Long:</span>{' '}
+                            {formatCellValue(dam.latitude)} / {formatCellValue(dam.longitude)}
+                          </div>
+                        </td>
+                        <td className="px-5 py-4 text-xs text-slate-600 space-y-1">
+                          <div>
+                            <span className="text-slate-400">Situação:</span>{' '}
+                            {formatCellValue(dam.situacao)}
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Dano Potencial:</span>{' '}
+                            {formatCellValue(dam.dano_potencial)}
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Categoria Risco:</span>{' '}
+                            {formatCellValue(dam.categoria_risco)}
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Altura / Volume:</span>{' '}
+                            {formatCellValue(dam.altura)} / {formatCellValue(dam.volume)}
+                          </div>
+                          {dam.classificada_em && (
+                            <div>
+                              <span className="text-slate-400">Classificada em:</span>{' '}
+                              {formatCellValue(dam.classificada_em)}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-5 py-4 text-right">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDetailModal({
+                                open: true,
+                                title: dam.nome,
+                                subtitle: 'Contrato S2S-V2 (/api/administra-leitura • barragens_v2 • masked)',
+                                primaryRecord: dam as unknown as AdministraRecord,
+                                relations: [],
+                                isDam: false,
+                              })
+                            }
+                            className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg inline-flex items-center gap-1"
+                          >
+                            <Eye size={13} /> Detalhes
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : activeTab !== 'produtos' && loading ? (
           <div className="py-16 text-center text-slate-500 space-y-3">
             <Loader2 className="animate-spin mx-auto text-emerald-600" size={32} />
             <p className="text-sm font-semibold">
@@ -1014,114 +1374,7 @@ export const EcosystemHub: React.FC = () => {
               </div>
             )}
 
-            {activeTab === 'barragens' && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse min-w-[880px]">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-xs uppercase font-bold">
-                      <th className="px-5 py-4 border-b">Barragem</th>
-                      <th className="px-5 py-4 border-b">Atributos</th>
-                      <th className="px-5 py-4 border-b">Empreendedor</th>
-                      <th className="px-5 py-4 border-b">RTs Vinculados (RT–Barragem)</th>
-                      <th className="px-5 py-4 border-b text-right">Detalhes</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-sm">
-                    {barragens.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
-                          {serverConfigured === false
-                            ? 'Configure as variáveis server-side do Administra Barragens para consultar barragens.'
-                            : debouncedSearch
-                            ? `Nenhuma barragem encontrada no Administra para "${debouncedSearch}".`
-                            : 'Nenhuma barragem retornada pela RPC csb_ler_barragens.'}
-                        </td>
-                      </tr>
-                    ) : (
-                      barragens.map((item, idx) => {
-                        const bar = item.record;
-                        const barId = pickField(bar, [/^id$/i, /^barragem_id$/i, /^id_barragem$/i]);
-                        const summary = getSummaryEntries(bar, 3, COORD_EXCLUDE_PATTERNS);
-                        const coords = getBarragemCoordinatesGMS(bar);
-                        return (
-                          <tr key={barId || String(idx)} className="hover:bg-slate-50/70 align-top">
-                            <td className="px-5 py-4">
-                              <div className="font-bold text-slate-800">{getBarragemLabel(bar)}</div>
-                              {barId && <div className="text-[11px] font-mono text-slate-400 mt-0.5">{barId}</div>}
-                            </td>
-                            <td className="px-5 py-4 text-xs text-slate-600 space-y-1 max-w-xs break-words">
-                              {summary.map(([k, v]) => (
-                                <div key={k} className="break-words">
-                                  <span className="text-slate-400">{k}:</span> {v}
-                                </div>
-                              ))}
-                              <div className="break-words font-mono text-slate-700">
-                                <span className="font-sans text-slate-400">LAT:</span> {coords.lat || '—'}
-                              </div>
-                              <div className="break-words font-mono text-slate-700">
-                                <span className="font-sans text-slate-400">LONG:</span> {coords.long || '—'}
-                              </div>
-                            </td>
-                            <td className="px-5 py-4 text-xs">
-                              {item.empreendedor ? (
-                                <div>
-                                  <div className="font-bold text-slate-800">{getEmpreendedorLabel(item.empreendedor)}</div>
-                                  {getEmpreendedorDoc(item.empreendedor) && (
-                                    <div className="font-mono text-slate-500">{getEmpreendedorDoc(item.empreendedor)}</div>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-slate-400">Não vinculado</span>
-                              )}
-                            </td>
-                            <td className="px-5 py-4 text-xs">
-                              {item.vinculosRt.length === 0 ? (
-                                <span className="text-slate-400">Sem RT vinculado</span>
-                              ) : (
-                                <div className="flex flex-wrap gap-1.5">
-                                  {item.vinculosRt.map((v, vIdx) => (
-                                    <span
-                                      key={String(v.vinculo.id ?? vIdx)}
-                                      className="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 font-semibold"
-                                    >
-                                      {v.rt ? getRtLabel(v.rt) : `Vínculo #${vIdx + 1}`}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-5 py-4 text-right">
-                              <button
-                                onClick={() =>
-                                  openDamDetails(bar, [
-                                    ...(item.empreendedor
-                                      ? [{ label: 'Empreendedor vinculado (csb_ler_empreendedores)', records: [item.empreendedor] }]
-                                      : []),
-                                    {
-                                      label: `Vínculos RT–Barragem (${item.vinculosRt.length})`,
-                                      records: item.vinculosRt.map((v) => v.vinculo),
-                                    },
-                                    {
-                                      label: 'Responsáveis Técnicos vinculados (csb_ler_rts)',
-                                      records: item.vinculosRt
-                                        .map((v) => v.rt)
-                                        .filter((rt): rt is AdministraRecord => Boolean(rt)),
-                                    },
-                                  ])
-                                }
-                                className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg inline-flex items-center gap-1"
-                              >
-                                <Eye size={13} /> Detalhes
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            {/* Tabela legada da aba Barragens removida deste bloco pois é renderizada acima via barragens_v2 */}
 
             {activeTab === 'rts' && (
               <div className="overflow-x-auto">
@@ -1362,8 +1615,53 @@ export const EcosystemHub: React.FC = () => {
           </>
         )}
 
-        {/* Rodapé de paginação para abas do Administra */}
-        {activeTab !== 'produtos' && serverConfigured !== false && !activeError && (
+        {/* Rodapé de paginação por cursor para Barragens v2 */}
+        {activeTab === 'barragens' &&
+          !barragensV2Loading &&
+          !barragensV2Error &&
+          barragensV2MaskingPolicy === 'masked' && (
+            <div className="px-5 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+              <div>
+                Mostrando <strong className="text-slate-900">{barragensV2.length}</strong> registro(s) nesta página
+                {typeof barragensV2Pagination.total === 'number' ? (
+                  <>
+                    {' '}
+                    de <strong className="text-slate-900">{barragensV2Pagination.total}</strong> no total
+                  </>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={barragensV2Loading || cursorState.cursorPageIndex <= 0}
+                  onClick={() => setCursorState((prev) => retreatBarragensV2Cursor(prev))}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1"
+                >
+                  <ChevronLeft size={14} /> Anterior
+                </button>
+                <span className="px-2 font-bold text-slate-700">
+                  Página {cursorState.cursorPageIndex + 1}
+                </span>
+                <button
+                  type="button"
+                  disabled={
+                    barragensV2Loading ||
+                    !barragensV2Pagination.hasMore ||
+                    !barragensV2Pagination.nextCursor
+                  }
+                  onClick={() =>
+                    setCursorState((prev) => advanceBarragensV2Cursor(prev, barragensV2Pagination))
+                  }
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1"
+                >
+                  Próxima <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
+        {/* Rodapé de paginação para abas legadas do Administra */}
+        {activeTab !== 'produtos' && activeTab !== 'barragens' && serverConfigured !== false && !activeError && (
           <div className="px-5 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
             <div>
               Mostrando <strong className="text-slate-900">{fromIdx}</strong>–<strong className="text-slate-900">{toIdx}</strong>
