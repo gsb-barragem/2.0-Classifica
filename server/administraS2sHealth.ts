@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 
 export const S2S_V2_VERSION = 'S2S-V2';
 export const ADMINISTRA_HEALTH_PATH = '/api/v2/health';
+export const ADMINISTRA_BARRAGENS_V2_PATH = '/api/v2/barragens';
 export const EMPTY_BODY_SHA256 =
   'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
@@ -37,6 +38,13 @@ export interface AdministraHealthCheckResult {
   jti: string;
   bodySha256: string;
   body: unknown;
+}
+
+export interface AdministraS2sGetResult {
+  ok: boolean;
+  status: number;
+  body: unknown;
+  headers: Headers;
 }
 
 function assertSingleLineValue(value: string, fieldName: string): string {
@@ -78,7 +86,11 @@ export function parseEd25519PrivateKey(rawPem: string): crypto.KeyObject {
   return keyObject;
 }
 
-export function resolveAdministraHealthUrl(rawBaseUrl: string): string {
+export function resolveAdministraS2sUrl(
+  rawBaseUrl: string,
+  rawPath: string,
+  rawQuery = ''
+): string {
   const trimmed = rawBaseUrl.trim();
   if (!trimmed) {
     throw new Error('ADMINISTRA_API_BASE_URL não configurada.');
@@ -109,7 +121,17 @@ export function resolveAdministraHealthUrl(rawBaseUrl: string): string {
     );
   }
 
-  return `${parsed.origin}${ADMINISTRA_HEALTH_PATH}`;
+  const normalizedPath = normalizeS2sPath(rawPath);
+  if (normalizedPath.includes('?') || normalizedPath.includes('#')) {
+    throw new Error('path S2S não deve conter query string nem fragmento.');
+  }
+
+  const canonicalQuery = canonicalizeS2sQuery(rawQuery);
+  return `${parsed.origin}${normalizedPath}${canonicalQuery ? `?${canonicalQuery}` : ''}`;
+}
+
+export function resolveAdministraHealthUrl(rawBaseUrl: string): string {
+  return resolveAdministraS2sUrl(rawBaseUrl, ADMINISTRA_HEALTH_PATH);
 }
 
 export function normalizeS2sPath(rawPath: string): string {
@@ -309,6 +331,64 @@ export function readAdministraS2sEnv(
     baseUrl,
     keyId,
     privateKeyPem,
+  };
+}
+
+export async function requestAdministraS2sGet(params: {
+  path: string;
+  query?: string;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  timestamp?: string;
+  jti?: string;
+}): Promise<AdministraS2sGetResult> {
+  if (typeof window !== 'undefined') {
+    throw new Error(
+      'Cliente S2S-V2 só pode ser executado no servidor.'
+    );
+  }
+
+  const config = readAdministraS2sEnv(params.env ?? process.env);
+  const canonicalQuery = canonicalizeS2sQuery(params.query ?? '');
+  const normalizedPath = normalizeS2sPath(params.path);
+  const url = resolveAdministraS2sUrl(config.baseUrl, normalizedPath, canonicalQuery);
+  const { headers } = createAdministraS2sHeaders({
+    method: 'GET',
+    path: normalizedPath,
+    query: canonicalQuery,
+    contentType: '',
+    bodySha256: EMPTY_BODY_SHA256,
+    keyId: config.keyId,
+    privateKeyPem: config.privateKeyPem,
+    timestamp: params.timestamp,
+    jti: params.jti,
+  });
+
+  const fetchFn = params.fetchImpl ?? fetch;
+  const timeoutMs = params.timeoutMs ?? 8_000;
+
+  const response = await fetchFn(url, {
+    method: 'GET',
+    headers,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  const rawText = await response.text();
+  let parsedBody: unknown = null;
+  if (rawText) {
+    try {
+      parsedBody = JSON.parse(rawText);
+    } catch {
+      parsedBody = null;
+    }
+  }
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    body: parsedBody,
+    headers: response.headers,
   };
 }
 

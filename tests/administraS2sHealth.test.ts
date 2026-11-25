@@ -5,11 +5,16 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import {
+  ADMINISTRA_BARRAGENS_V2_PATH,
   ADMINISTRA_HEALTH_PATH,
+  buildS2sV2CanonicalString,
   buildS2sV2HealthCanonicalString,
+  canonicalizeS2sQuery,
   createAdministraS2sHealthHeaders,
   EMPTY_BODY_SHA256,
+  requestAdministraS2sGet,
   resolveAdministraHealthUrl,
+  resolveAdministraS2sUrl,
   signS2sV2Canonical,
   testAdministraHealth,
 } from '../server/administraS2sHealth';
@@ -256,5 +261,99 @@ test('variáveis S2S e cliente server-side não são referenciados no frontend n
         );
       }
     }
+  }
+});
+
+test('requestAdministraS2sGet assina query canonicalizada de GET /api/v2/barragens de forma idêntica ao servidor', async () => {
+  const { privateKeyPem, publicKey } = generateEphemeralEd25519Pair();
+  const keyId = 'classifica-test-kid-barragens';
+
+  assert.throws(
+    () =>
+      resolveAdministraS2sUrl(
+        'https://administra.exemplo.gov.br',
+        '/api/v2/barragens?limit=10'
+      ),
+    /query string/
+  );
+  assert.equal(
+    resolveAdministraS2sUrl(
+      'https://administra.exemplo.gov.br',
+      ADMINISTRA_BARRAGENS_V2_PATH,
+      'limit=20&cursor=cur_1'
+    ),
+    'https://administra.exemplo.gov.br/api/v2/barragens?cursor=cur_1&limit=20'
+  );
+
+  let observedPathname = '';
+  let observedQuery = '';
+  let verifiedSignature = false;
+
+  const server = http.createServer((req, res) => {
+    const parsedUrl = new URL(req.url || '/', 'http://127.0.0.1');
+    observedPathname = parsedUrl.pathname;
+    observedQuery = parsedUrl.search.replace(/^\?/, '');
+
+    const canonicalFromWire = buildS2sV2CanonicalString({
+      method: req.method || '',
+      path: observedPathname,
+      query: canonicalizeS2sQuery(observedQuery),
+      contentType: String(req.headers['content-type'] || ''),
+      bodySha256: String(req.headers['x-s2s-body-sha256'] || ''),
+      keyId: String(req.headers['x-s2s-key-id'] || ''),
+      timestamp: String(req.headers['x-s2s-timestamp'] || ''),
+      jti: String(req.headers['x-s2s-jti'] || ''),
+    });
+
+    const sig = String(req.headers['x-s2s-signature'] || '');
+    verifiedSignature = crypto.verify(
+      null,
+      Buffer.from(canonicalFromWire, 'utf8'),
+      publicKey,
+      Buffer.from(sig, 'base64')
+    );
+
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('x-masking-policy', 'masked');
+    res.end(
+      JSON.stringify({
+        maskingPolicy: 'masked',
+        items: [],
+        pagination: { limit: 20, nextCursor: null, hasMore: false, total: 0 },
+      })
+    );
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+
+  try {
+    const addr = server.address();
+    assert.ok(addr && typeof addr !== 'string');
+    const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    const result = await requestAdministraS2sGet({
+      path: ADMINISTRA_BARRAGENS_V2_PATH,
+      query: 'limit=20&cursor=cur_1',
+      env: {
+        ADMINISTRA_API_BASE_URL: baseUrl,
+        CLASSIFICA_S2S_KID: keyId,
+        CLASSIFICA_S2S_PRIVATE_KEY: privateKeyPem,
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 200);
+    assert.equal(observedPathname, '/api/v2/barragens');
+    assert.equal(observedQuery, 'cursor=cur_1&limit=20');
+    assert.equal(verifiedSignature, true);
+    assert.equal(result.headers.get('x-masking-policy'), 'masked');
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
   }
 });

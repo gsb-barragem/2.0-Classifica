@@ -1,10 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import {
+  ADMINISTRA_BARRAGENS_V2_PATH,
+  requestAdministraS2sGet,
+} from '../server/administraS2sHealth';
 
 export type AdministraLeituraAction =
   | 'diagnostico'
   | 'empreendedores'
   | 'barragens'
+  | 'barragens_v2'
   | 'rts'
   | 'vinculos_rt_barragem';
 
@@ -23,12 +28,15 @@ type NodeRes = ServerResponse & {
 export interface AdministraLeituraDeps {
   verifySession?: typeof verifyClassificaSession;
   getAdministraClient?: typeof getAdministraServerClient;
+  requestS2sGet?: typeof requestAdministraS2sGet;
+  s2sEnv?: NodeJS.ProcessEnv;
 }
 
 const ALLOWED_ACTIONS = new Set<AdministraLeituraAction>([
   'diagnostico',
   'empreendedores',
   'barragens',
+  'barragens_v2',
   'rts',
   'vinculos_rt_barragem',
 ]);
@@ -657,9 +665,394 @@ function indexById(
   return map;
 }
 
+export interface BarragemV2Dto {
+  id: string;
+  nome: string;
+  car: string | null;
+  uf: string | null;
+  municipio: string | null;
+  municipio_ibge: string | number | null;
+  empreendimento: string | null;
+  processo: string | null;
+  snisb: string | null;
+  curso_agua: string | null;
+  latitude: number | string | null;
+  longitude: number | string | null;
+  altura: number | string | null;
+  volume: number | string | null;
+  dano_potencial: string | null;
+  categoria_risco: string | null;
+  classificada_em: string | null;
+  situacao: string | null;
+  empreendedor_id: string | null;
+}
+
+export interface BarragensV2Pagination {
+  limit: number | null;
+  nextCursor: string | null;
+  hasMore: boolean;
+  total: number | null;
+}
+
+const BARRAGENS_V2_ALLOWED_BODY_KEYS = new Set(['action', 'limit', 'cursor']);
+const BARRAGENS_V2_MAX_LIMIT = 100;
+const BARRAGENS_V2_MAX_CURSOR_LENGTH = 512;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function parseOptionalNullableString(
+  value: unknown
+): { ok: true; value: string | null } | { ok: false } {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (typeof value === 'string') return { ok: true, value };
+  return { ok: false };
+}
+
+function parseOptionalNullableStringOrNumber(
+  value: unknown
+): { ok: true; value: string | number | null } | { ok: false } {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (typeof value === 'string') return { ok: true, value };
+  if (typeof value === 'number' && Number.isFinite(value)) return { ok: true, value };
+  return { ok: false };
+}
+
+function parseBarragensV2Params(body: Record<string, unknown>):
+  | { ok: true; limit?: number; cursor?: string; query: string }
+  | { ok: false; code: string; error: string } {
+  for (const key of Object.keys(body)) {
+    if (!BARRAGENS_V2_ALLOWED_BODY_KEYS.has(key)) {
+      return {
+        ok: false,
+        code: 'INVALID_PARAMS',
+        error: 'Parâmetros não suportados para a ação barragens_v2. Utilize apenas limit e cursor.',
+      };
+    }
+  }
+
+  let limit: number | undefined;
+  if (body.limit !== undefined && body.limit !== null && body.limit !== '') {
+    let parsedLimit = NaN;
+    if (typeof body.limit === 'number') {
+      if (Number.isInteger(body.limit)) {
+        parsedLimit = body.limit;
+      }
+    } else if (typeof body.limit === 'string' && /^\d+$/.test(body.limit.trim())) {
+      parsedLimit = Number.parseInt(body.limit.trim(), 10);
+    }
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > BARRAGENS_V2_MAX_LIMIT) {
+      return {
+        ok: false,
+        code: 'INVALID_LIMIT',
+        error: `Parâmetro limit inválido. Informe um inteiro entre 1 e ${BARRAGENS_V2_MAX_LIMIT}.`,
+      };
+    }
+    limit = parsedLimit;
+  }
+
+  let cursor: string | undefined;
+  if (body.cursor !== undefined && body.cursor !== null && body.cursor !== '') {
+    if (typeof body.cursor !== 'string') {
+      return {
+        ok: false,
+        code: 'INVALID_CURSOR',
+        error: 'Parâmetro cursor inválido.',
+      };
+    }
+    if (
+      body.cursor.length === 0 ||
+      body.cursor.length > BARRAGENS_V2_MAX_CURSOR_LENGTH ||
+      /[\x00-\x1f\x7f\s]/.test(body.cursor)
+    ) {
+      return {
+        ok: false,
+        code: 'INVALID_CURSOR',
+        error: 'Parâmetro cursor inválido.',
+      };
+    }
+    cursor = body.cursor;
+  }
+
+  const searchParams = new URLSearchParams();
+  if (cursor !== undefined) {
+    searchParams.set('cursor', cursor);
+  }
+  if (limit !== undefined) {
+    searchParams.set('limit', String(limit));
+  }
+
+  return {
+    ok: true,
+    limit,
+    cursor,
+    query: searchParams.toString(),
+  };
+}
+
+function parseBarragemV2Item(raw: unknown): BarragemV2Dto | null {
+  if (!isPlainObject(raw)) return null;
+
+  const id = raw.id;
+  const nome = raw.nome;
+  if (typeof id !== 'string' || !id.trim() || typeof nome !== 'string' || !nome.trim()) {
+    return null;
+  }
+
+  const car = parseOptionalNullableString(raw.car);
+  const uf = parseOptionalNullableString(raw.uf);
+  const municipio = parseOptionalNullableString(raw.municipio);
+  const municipioIbge = parseOptionalNullableStringOrNumber(raw.municipio_ibge);
+  const empreendimento = parseOptionalNullableString(raw.empreendimento);
+  const processo = parseOptionalNullableString(raw.processo);
+  const snisb = parseOptionalNullableString(raw.snisb);
+  const cursoAgua = parseOptionalNullableString(raw.curso_agua);
+  const latitude = parseOptionalNullableStringOrNumber(raw.latitude);
+  const longitude = parseOptionalNullableStringOrNumber(raw.longitude);
+  const altura = parseOptionalNullableStringOrNumber(raw.altura);
+  const volume = parseOptionalNullableStringOrNumber(raw.volume);
+  const danoPotencial = parseOptionalNullableString(raw.dano_potencial);
+  const categoriaRisco = parseOptionalNullableString(raw.categoria_risco);
+  const classificadaEm = parseOptionalNullableString(raw.classificada_em);
+  const situacao = parseOptionalNullableString(raw.situacao);
+  const empreendedorId = parseOptionalNullableString(raw.empreendedor_id);
+
+  if (
+    !car.ok ||
+    !uf.ok ||
+    !municipio.ok ||
+    !municipioIbge.ok ||
+    !empreendimento.ok ||
+    !processo.ok ||
+    !snisb.ok ||
+    !cursoAgua.ok ||
+    !latitude.ok ||
+    !longitude.ok ||
+    !altura.ok ||
+    !volume.ok ||
+    !danoPotencial.ok ||
+    !categoriaRisco.ok ||
+    !classificadaEm.ok ||
+    !situacao.ok ||
+    !empreendedorId.ok
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    nome,
+    car: car.value,
+    uf: uf.value,
+    municipio: municipio.value,
+    municipio_ibge: municipioIbge.value,
+    empreendimento: empreendimento.value,
+    processo: processo.value,
+    snisb: snisb.value,
+    curso_agua: cursoAgua.value,
+    latitude: latitude.value,
+    longitude: longitude.value,
+    altura: altura.value,
+    volume: volume.value,
+    dano_potencial: danoPotencial.value,
+    categoria_risco: categoriaRisco.value,
+    classificada_em: classificadaEm.value,
+    situacao: situacao.value,
+    empreendedor_id: empreendedorId.value,
+  };
+}
+
+function parseBarragensV2Response(
+  rawBody: unknown,
+  headers: Headers,
+  requestedLimit?: number
+):
+  | {
+      ok: true;
+      maskingPolicy: 'masked';
+      pagination: BarragensV2Pagination;
+      items: BarragemV2Dto[];
+    }
+  | { ok: false; code: string; error: string } {
+  const headerPolicy = headers.get('x-masking-policy');
+  if (headerPolicy !== null && headerPolicy.trim() !== 'masked') {
+    return {
+      ok: false,
+      code: 'INVALID_MASKING_POLICY',
+      error: 'Resposta externa rejeitada: política de mascaramento inválida.',
+    };
+  }
+
+  if (!isPlainObject(rawBody)) {
+    return {
+      ok: false,
+      code: 'INVALID_UPSTREAM_RESPONSE',
+      error: 'Resposta inválida do serviço Administra v2.',
+    };
+  }
+
+  const metaPolicy = isPlainObject(rawBody.meta) ? rawBody.meta.maskingPolicy : undefined;
+  const maskingPolicy =
+    rawBody.maskingPolicy !== undefined ? rawBody.maskingPolicy : metaPolicy;
+  if (maskingPolicy !== 'masked') {
+    return {
+      ok: false,
+      code: 'INVALID_MASKING_POLICY',
+      error: 'Resposta externa rejeitada: maskingPolicy obrigatório deve ser "masked".',
+    };
+  }
+
+  const rawItems = Array.isArray(rawBody.items)
+    ? rawBody.items
+    : Array.isArray(rawBody.data)
+    ? rawBody.data
+    : null;
+  if (!rawItems) {
+    return {
+      ok: false,
+      code: 'INVALID_UPSTREAM_RESPONSE',
+      error: 'Resposta inválida do serviço Administra v2.',
+    };
+  }
+
+  let pagSource: Record<string, unknown>;
+  if (rawBody.pagination !== undefined) {
+    if (!isPlainObject(rawBody.pagination)) {
+      return {
+        ok: false,
+        code: 'INVALID_UPSTREAM_RESPONSE',
+        error: 'Paginação inválida na resposta do serviço Administra v2.',
+      };
+    }
+    pagSource = rawBody.pagination;
+  } else {
+    pagSource = rawBody;
+  }
+
+  const rawLimit = pagSource.limit !== undefined ? pagSource.limit : pagSource.pageSize;
+  let limit: number | null = requestedLimit ?? null;
+  if (rawLimit !== undefined && rawLimit !== null) {
+    if (typeof rawLimit !== 'number' || !Number.isInteger(rawLimit) || rawLimit < 1) {
+      return {
+        ok: false,
+        code: 'INVALID_UPSTREAM_RESPONSE',
+        error: 'Paginação inválida na resposta do serviço Administra v2.',
+      };
+    }
+    limit = rawLimit;
+  }
+
+  const rawNextCursor =
+    pagSource.nextCursor !== undefined ? pagSource.nextCursor : pagSource.next_cursor;
+  let nextCursor: string | null = null;
+  if (rawNextCursor !== undefined && rawNextCursor !== null) {
+    if (typeof rawNextCursor !== 'string') {
+      return {
+        ok: false,
+        code: 'INVALID_UPSTREAM_RESPONSE',
+        error: 'Paginação inválida na resposta do serviço Administra v2.',
+      };
+    }
+    nextCursor = rawNextCursor.length > 0 ? rawNextCursor : null;
+  }
+
+  const rawHasMore =
+    pagSource.hasMore !== undefined ? pagSource.hasMore : pagSource.has_more;
+  let hasMore: boolean;
+  if (rawHasMore !== undefined) {
+    if (typeof rawHasMore !== 'boolean') {
+      return {
+        ok: false,
+        code: 'INVALID_UPSTREAM_RESPONSE',
+        error: 'Paginação inválida na resposta do serviço Administra v2.',
+      };
+    }
+    hasMore = rawHasMore;
+  } else {
+    hasMore = nextCursor !== null;
+  }
+
+  const rawTotal = pagSource.total;
+  let total: number | null = null;
+  if (rawTotal !== undefined && rawTotal !== null) {
+    if (typeof rawTotal !== 'number' || !Number.isInteger(rawTotal) || rawTotal < 0) {
+      return {
+        ok: false,
+        code: 'INVALID_UPSTREAM_RESPONSE',
+        error: 'Paginação inválida na resposta do serviço Administra v2.',
+      };
+    }
+    total = rawTotal;
+  }
+
+  const items: BarragemV2Dto[] = [];
+  for (const rawItem of rawItems) {
+    const parsedItem = parseBarragemV2Item(rawItem);
+    if (!parsedItem) {
+      return {
+        ok: false,
+        code: 'INVALID_UPSTREAM_ITEM',
+        error: 'Registro inválido recebido do serviço Administra v2.',
+      };
+    }
+    items.push(parsedItem);
+  }
+
+  return {
+    ok: true,
+    maskingPolicy: 'masked',
+    pagination: {
+      limit,
+      nextCursor,
+      hasMore,
+      total,
+    },
+    items,
+  };
+}
+
+function classifyS2sError(err: unknown): {
+  status: number;
+  code: string;
+  error: string;
+} {
+  if (err instanceof Error) {
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+      return {
+        status: 504,
+        code: 'ADMINISTRA_V2_TIMEOUT',
+        error: 'Tempo limite excedido ao consultar o serviço Administra v2.',
+      };
+    }
+    const msg = err.message;
+    if (
+      msg.includes('ADMINISTRA_API_BASE_URL') ||
+      msg.includes('CLASSIFICA_S2S_KID') ||
+      msg.includes('CLASSIFICA_S2S_PRIVATE_KEY')
+    ) {
+      return {
+        status: 503,
+        code: 'ADMINISTRA_S2S_CONFIG_INVALID',
+        error: 'Configuração S2S-V2 do servidor indisponível ou inválida.',
+      };
+    }
+  }
+  return {
+    status: 502,
+    code: 'ADMINISTRA_V2_UNAVAILABLE',
+    error: 'Falha ao consultar o serviço Administra v2.',
+  };
+}
+
 export function createAdministraLeituraHandler(deps: AdministraLeituraDeps = {}) {
   const verifySession = deps.verifySession ?? verifyClassificaSession;
   const resolveAdministraClient = deps.getAdministraClient ?? getAdministraServerClient;
+  const performS2sGet = deps.requestS2sGet ?? requestAdministraS2sGet;
 
   return async function handler(req: NodeReq, res: NodeRes): Promise<void> {
   if (req.method !== 'POST') {
@@ -692,18 +1085,6 @@ export function createAdministraLeituraHandler(deps: AdministraLeituraDeps = {})
     return;
   }
 
-  const administraCheck = resolveAdministraClient(sessionCheck.classificaUrl);
-  if (administraCheck.ok === false) {
-    sendJson(res, administraCheck.status, {
-      ok: false,
-      configured: false,
-      code: administraCheck.code,
-      error: administraCheck.error,
-      meta: administraCheck.meta,
-    });
-    return;
-  }
-
   let body: Record<string, unknown>;
   try {
     body = await readJsonBody(req);
@@ -718,6 +1099,79 @@ export function createAdministraLeituraHandler(deps: AdministraLeituraDeps = {})
       ok: false,
       code: 'INVALID_ACTION',
       error: 'Ação não permitida.',
+    });
+    return;
+  }
+
+  if (action === 'barragens_v2') {
+    const parsedParams = parseBarragensV2Params(body);
+    if (parsedParams.ok === false) {
+      sendJson(res, 400, {
+        ok: false,
+        code: parsedParams.code,
+        error: parsedParams.error,
+      });
+      return;
+    }
+
+    let upstream;
+    try {
+      upstream = await performS2sGet({
+        path: ADMINISTRA_BARRAGENS_V2_PATH,
+        query: parsedParams.query,
+        env: deps.s2sEnv,
+      });
+    } catch (err) {
+      const classified = classifyS2sError(err);
+      sendJson(res, classified.status, {
+        ok: false,
+        code: classified.code,
+        error: classified.error,
+      });
+      return;
+    }
+
+    if (!upstream.ok) {
+      sendJson(res, 502, {
+        ok: false,
+        code: 'ADMINISTRA_V2_UPSTREAM_ERROR',
+        error: 'O serviço Administra v2 recusou ou falhou ao processar a consulta.',
+      });
+      return;
+    }
+
+    const validated = parseBarragensV2Response(
+      upstream.body,
+      upstream.headers,
+      parsedParams.limit
+    );
+    if (validated.ok === false) {
+      sendJson(res, 502, {
+        ok: false,
+        code: validated.code,
+        error: validated.error,
+      });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      action: 'barragens_v2',
+      maskingPolicy: validated.maskingPolicy,
+      pagination: validated.pagination,
+      items: validated.items,
+    });
+    return;
+  }
+
+  const administraCheck = resolveAdministraClient(sessionCheck.classificaUrl);
+  if (administraCheck.ok === false) {
+    sendJson(res, administraCheck.status, {
+      ok: false,
+      configured: false,
+      code: administraCheck.code,
+      error: administraCheck.error,
+      meta: administraCheck.meta,
     });
     return;
   }
