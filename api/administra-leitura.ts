@@ -3,7 +3,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   ADMINISTRA_BARRAGENS_V2_PATH,
   requestAdministraS2sGet,
-} from '../server/administraS2sHealth';
+} from '../server/administraS2sHealth.js';
 
 export type AdministraLeituraAction =
   | 'diagnostico'
