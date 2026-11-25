@@ -26,6 +26,8 @@ import { AppDocument, DataContext } from '../src/contexts/DataContext';
 import { getEcosystemStatus } from '../src/lib/ecosystemClients';
 import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
 import { SolicitarVistoriaModal } from './SolicitarVistoriaModal';
+// TEMPORÁRIO: remover importação e renderização de AdministraS2sBarragensTempTestCard após validar S2S-V2.
+import { AdministraS2sBarragensTempTestCard } from './AdministraS2sBarragensTempTestCard';
 import {
   AdministraCanonicalTable,
   AdministraReadError,
@@ -675,6 +677,9 @@ export const EcosystemHub: React.FC = () => {
           </div>
         ))}
       </div>
+
+      {/* TEMPORÁRIO: teste administrativo S2S-V2 para GET /api/v2/barragens?limit=1 (remover após validação) */}
+      {currentUser?.role === 'Administrador' && <AdministraS2sBarragensTempTestCard />}
 
       {/* Diagnóstico das 4 RPCs canônicas no Administra via /api/administra-leitura */}
       {serverConfigured === false && diagnosticsError ? (

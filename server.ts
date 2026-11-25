@@ -9,6 +9,8 @@ import administraLeituraHandler from './api/administra-leitura.ts';
 import administraEscritaHandler from './api/administra-escrita.ts';
 import pendenciasHandler from './api/pendencias.ts';
 import solicitacoesVistoriaHandler from './api/solicitacoes-vistoria.ts';
+// TEMPORÁRIO: remover importação e rota de administra-s2s-barragens-test após validação.
+import administraS2sBarragensTestHandler from './api/administra-s2s-barragens-test.ts';
 
 dotenv.config();
 
@@ -23,6 +25,7 @@ export interface ApiAppHandlers {
   administraEscrita?: RequestHandler;
   pendencias?: RequestHandler;
   solicitacoesVistoria?: RequestHandler;
+  administraS2sBarragensTest?: RequestHandler;
 }
 
 export function createApiApp(handlers: ApiAppHandlers = {}) {
@@ -85,6 +88,9 @@ export function createApiApp(handlers: ApiAppHandlers = {}) {
     handlers.pendencias ?? ((req, res) => void pendenciasHandler(req, res));
   const handleVistoria =
     handlers.solicitacoesVistoria ?? ((req, res) => void solicitacoesVistoriaHandler(req, res));
+  const handleS2sBarragensTest =
+    handlers.administraS2sBarragensTest ??
+    ((req, res) => void administraS2sBarragensTestHandler(req, res));
 
   app.all('/api/administra-leitura', handleLeitura);
   app.all('/api/administra-escrita', handleEscrita);
@@ -93,6 +99,7 @@ export function createApiApp(handlers: ApiAppHandlers = {}) {
   app.all('/api/solicitacoes-vistoria/:id', handleVistoria);
   app.all('/api/solicitacoes-vistoria/:id/observacao', handleVistoria);
   app.all('/api/solicitacoes-vistoria/:id/cancelar', handleVistoria);
+  app.all('/api/administra-s2s-barragens-test', handleS2sBarragensTest);
 
   return app;
 }
