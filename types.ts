@@ -240,6 +240,9 @@ export interface ParecerData {
   empreendimentoId?: string;
   barragemId?: string;
   sistemaOrigem?: SistemaOrigem;
+  condicaoArea?: '' | 'proprietario' | 'arrendatario';
+  vigenciaContratoAnos?: string;
+  vigenciaInicio?: string;
 }
 
 export interface InformacaoEmpreendedor {

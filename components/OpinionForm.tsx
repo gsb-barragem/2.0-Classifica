@@ -36,11 +36,14 @@ import {
 import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../src/config/integrationArchitecture';
 import { supabase } from '../src/supabaseClient';
 import {
+  applyParecerFieldChange,
+  buildParecerSavePayloads,
   buildSuggestedParecerText,
   deriveClassification,
   evaluateCt5Age,
   getUpgOptionsForMunicipality,
   isPreClassificacaoTipo,
+  normalizeCondicaoAreaState,
 } from '../src/utils/opinionCalculations';
 import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
 import { OperationType, handleSupabaseError } from '../src/utils/supabaseErrorHandler';
@@ -119,7 +122,7 @@ const createEmptyBarramento = (id: string, nomePadrao = ''): BarramentoData => (
   possuiAdequacao: false,
 });
 
-const INITIAL_DATA: ParecerData = {
+export const INITIAL_DATA: ParecerData = {
   protocolo: '',
   analista: '',
   analistaOutro: '',
@@ -132,6 +135,9 @@ const INITIAL_DATA: ParecerData = {
   localizacao: '',
   numCAR: '',
   municipio: '',
+  condicaoArea: '',
+  vigenciaContratoAnos: '',
+  vigenciaInicio: '',
   finalidade: '',
   finalidadeOutro: '',
   situacaoEmpreendimento: '',
@@ -325,46 +331,34 @@ const maskCpfCnpj = (value: string) => {
   return digits.length <= 11 ? maskCPF(value) : maskCNPJ(value);
 };
 
-const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly = false }) => {
-  const { currentUser } = useContext(AuthContext);
+export function hydrateParecerInitialData(initialData: ParecerData): ParecerData {
+  const mergedPrincipal: BarramentoData = {
+    ...INITIAL_DATA.barragemPrincipal,
+    ...(initialData.barragemPrincipal || {}),
+    lat: normalizeCoordinateToGMS(initialData.barragemPrincipal?.lat),
+    long: normalizeCoordinateToGMS(initialData.barragemPrincipal?.long),
+    estruturas:
+      initialData.barragemPrincipal?.estruturas &&
+      initialData.barragemPrincipal.estruturas.length > 0
+        ? initialData.barragemPrincipal.estruturas
+        : [createEmptyStructure('main_s1', 1)],
+  };
 
-  const [confirmModal, setConfirmModal] = useState<{
-    isOpen: boolean;
-    title: string;
-    message: string;
-    onConfirm: () => void;
-    variant: 'danger' | 'warning' | 'info';
-  }>({
-    isOpen: false,
-    title: '',
-    message: '',
-    onConfirm: () => {},
-    variant: 'warning',
-  });
+  const isPre = isPreClassificacaoTipo(
+    initialData.tipoClassificacao,
+    initialData.classificacao?.criPreClassificacao
+  );
 
-  const [formData, setFormData] = useState<ParecerData>(() => {
-    if (initialData) {
-      const mergedPrincipal: BarramentoData = {
-        ...INITIAL_DATA.barragemPrincipal,
-        ...(initialData.barragemPrincipal || {}),
-        lat: normalizeCoordinateToGMS(initialData.barragemPrincipal?.lat),
-        long: normalizeCoordinateToGMS(initialData.barragemPrincipal?.long),
-        estruturas:
-          initialData.barragemPrincipal?.estruturas &&
-          initialData.barragemPrincipal.estruturas.length > 0
-            ? initialData.barragemPrincipal.estruturas
-            : [createEmptyStructure('main_s1', 1)],
-      };
+  const { condicaoArea, vigenciaContratoAnos, vigenciaInicio } =
+    normalizeCondicaoAreaState(initialData);
 
-      const isPre = isPreClassificacaoTipo(
-        initialData.tipoClassificacao,
-        initialData.classificacao?.criPreClassificacao
-      );
-
-      return {
-        ...INITIAL_DATA,
-        ...initialData,
-        docsGerais: reconcileDocList(INITIAL_DATA.docsGerais, initialData.docsGerais),
+  return {
+    ...INITIAL_DATA,
+    ...initialData,
+    condicaoArea,
+    vigenciaContratoAnos,
+    vigenciaInicio,
+    docsGerais: reconcileDocList(INITIAL_DATA.docsGerais, initialData.docsGerais),
         docsGeraisOutro: reconcileOtherDocs(
           INITIAL_DATA.docsGeraisOutro,
           initialData.docsGeraisOutro
@@ -415,6 +409,28 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
               : [createEmptyStructure(`montante_${i}_s1`, 1)],
         })),
       };
+}
+
+const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly = false }) => {
+  const { currentUser } = useContext(AuthContext);
+
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    variant: 'danger' | 'warning' | 'info';
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+    variant: 'warning',
+  });
+
+  const [formData, setFormData] = useState<ParecerData>(() => {
+    if (initialData) {
+      return hydrateParecerInitialData(initialData);
     }
 
     return {
@@ -626,29 +642,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
   };
 
   const handleInputChange = (field: keyof ParecerData, value: any) => {
-    setFormData((prev) => {
-      const updated = { ...prev, [field]: value };
-
-      // Preenche automaticamente UPG somente quando única; preserva quando houver múltiplas opções
-      if (field === 'municipio') {
-        const upgs = getUpgOptionsForMunicipality(value);
-        if (upgs.length === 1) {
-          updated.upg = upgs[0];
-        } else if (!value) {
-          updated.upg = '';
-        }
-      }
-
-      if (field === 'tipoClassificacao') {
-        const isPre = isPreClassificacaoTipo(value, false);
-        updated.classificacao = {
-          ...prev.classificacao,
-          criPreClassificacao: isPre,
-        };
-      }
-
-      return updated;
-    });
+    setFormData((prev) => applyParecerFieldChange(prev, field, value));
   };
 
   const handleClassificationChange = (field: keyof ClassificacaoData, value: any) => {
@@ -1159,116 +1153,13 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         setFormData((prev) => ({ ...prev, id: parecerId }));
       }
 
-      const payload = {
-        user_id: currentUser.id,
-        protocolo: snapshot.protocolo,
-        analista: snapshot.analista || userName,
-        analista_outro: snapshot.analistaOutro || null,
-        data_parecer: snapshot.data || null,
-        data_recebimento_processo: snapshot.dataRecebimentoProcesso || null,
-        razao_social: snapshot.razaoSocial,
-        cpf_cnpj: snapshot.cpfCnpj,
-        localizacao: snapshot.localizacao,
-        num_car: snapshot.numCAR,
-        municipio: snapshot.municipio,
-        finalidade: snapshot.finalidade,
-        finalidade_outro: snapshot.finalidadeOutro,
-        situacao_empreendimento: snapshot.situacaoEmpreendimento,
-        situacao_empreendimento_outro: snapshot.situacaoEmpreendimentoOutro,
-        curso_agua: snapshot.cursoAgua,
-        propriedades_limites: snapshot.propriedadesLimites,
-        sub_bacia: snapshot.subBacia,
-        upg: snapshot.upg,
-        area_bacia: snapshot.areaBacia,
-        indice_pluviosidade: snapshot.indicePluviosidade,
-        legenda_tabela1: snapshot.legendaTabela1,
-        tipo_classificacao: snapshot.tipoClassificacao,
-        tipo_classificacao_outro: snapshot.tipoClassificacaoOutro,
-        tipo_barragem: snapshot.tipoBarragem,
-        tipo_barragem_outro: snapshot.tipoBarragemOutro,
-        introducao: snapshot.introducao,
-        parecer_final: snapshot.parecer_final,
-        parecer_tecnico_numero: snapshot.parecerTecnicoNumero,
-        data_parecer_tecnico: snapshot.dataParecerTecnico || null,
-        portaria_numero: snapshot.portariaNumero,
-        data_portaria: snapshot.dataPortaria || null,
-        custom_portaria_text: snapshot.customPortariaText,
+      const { payload, fallback42703Payload } = buildParecerSavePayloads({
+        parecerId,
+        userId: currentUser.id,
+        userName,
         status,
-        tipo_documento: 'Parecer Técnico',
-        data_conclusao:
-          status === 'Concluído'
-            ? new Date().toISOString()
-            : snapshot.status === 'Concluído'
-            ? snapshot.dataConclusao
-            : null,
-        updated_at: new Date().toISOString(),
-        dpa_class: snapshot.classificacao.dpaClass || null,
-        dpa1_select: snapshot.classificacao.dpa1Select,
-        dpa2_select: snapshot.classificacao.dpa2Select,
-        dpa3_select: snapshot.classificacao.dpa3Select,
-        dpa4_select: snapshot.classificacao.dpa4Select,
-        score_dpa1: snapshot.classificacao.scoreDpa1,
-        score_dpa2: snapshot.classificacao.scoreDpa2,
-        score_dpa3: snapshot.classificacao.scoreDpa3,
-        score_dpa4: snapshot.classificacao.scoreDpa4,
-        total_dpa: snapshot.classificacao.totalDpa,
-        ruptura_texto: snapshot.classificacao.rupturaTexto,
-        legenda_dpa: snapshot.classificacao.legendaDPA,
-        cri_pre_classificacao: snapshot.classificacao.criPreClassificacao,
-        ct6_select: snapshot.classificacao.ct6Select,
-        ec1_select: snapshot.classificacao.ec1Select,
-        ec2_select: snapshot.classificacao.ec2Select,
-        ec3_select: snapshot.classificacao.ec3Select,
-        ec4_select: snapshot.classificacao.ec4Select,
-        ec5_select: snapshot.classificacao.ec5Select,
-        ps1_select: snapshot.classificacao.ps1Select,
-        ps2_select: snapshot.classificacao.ps2Select,
-        ps3_select: snapshot.classificacao.ps3Select,
-        ps4_select: snapshot.classificacao.ps4Select,
-        ps5_select: snapshot.classificacao.ps5Select,
-        ps6_select: snapshot.classificacao.ps6Select,
-        score_ct1: snapshot.classificacao.scoreCt1,
-        score_ct2: snapshot.classificacao.scoreCt2,
-        score_ct3: snapshot.classificacao.scoreCt3,
-        score_ct4: snapshot.classificacao.scoreCt4,
-        score_ct5: snapshot.classificacao.scoreCt5,
-        score_ct6: snapshot.classificacao.scoreCt6,
-        score_ec1: snapshot.classificacao.scoreEc1,
-        score_ec2: snapshot.classificacao.scoreEc2,
-        score_ec3: snapshot.classificacao.scoreEc3,
-        score_ec4: snapshot.classificacao.scoreEc4,
-        score_ec5: snapshot.classificacao.scoreEc5,
-        score_ps1: snapshot.classificacao.scorePs1,
-        score_ps2: snapshot.classificacao.scorePs2,
-        score_ps3: snapshot.classificacao.scorePs3,
-        score_ps4: snapshot.classificacao.scorePs4,
-        score_ps5: snapshot.classificacao.scorePs5,
-        score_ps6: snapshot.classificacao.scorePs6,
-        total_ct: snapshot.classificacao.totalCT,
-        total_ec: snapshot.classificacao.totalEC,
-        total_ps: snapshot.classificacao.totalPS,
-        val_geral: snapshot.classificacao.valGeral,
-        risk_geral: snapshot.classificacao.riskGeral || null,
-        val_percolacao: snapshot.classificacao.valPercolacao,
-        risk_percolacao: snapshot.classificacao.riskPercolacao || null,
-        val_galgamento: snapshot.classificacao.valGalgamento,
-        risk_galgamento: snapshot.classificacao.riskGalgamento || null,
-        val_gerencial: snapshot.classificacao.valGerencial,
-        risk_gerencial: snapshot.classificacao.riskGerencial || null,
-        risco: snapshot.classificacao.risco || null,
-        resumo: snapshot.classificacao.resumo,
-        empreendedor_id: snapshot.empreendedorId || null,
-        barragem_id: snapshot.barragemId || snapshot.barragemPrincipal?.barragemId || null,
-        sistema_origem: snapshot.sistemaOrigem || 'CLASSIFICA_CSB',
-        data: {
-          empreendedorId: snapshot.empreendedorId || null,
-          barragemId: snapshot.barragemId || snapshot.barragemPrincipal?.barragemId || null,
-          sistemaOrigem: snapshot.sistemaOrigem || 'CLASSIFICA_CSB',
-          responsaveisTecnicos: snapshot.responsaveisTecnicos || [],
-          barragemPrincipal: snapshot.barragemPrincipal,
-          barragensMontante: snapshot.barragensMontante || [],
-        },
-      };
+        snapshot,
+      });
 
       let actualParecerId = parecerId;
       const { data: parecerRows, error: parecerError } = await supabase
@@ -1281,16 +1172,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         if (parecerError.code === '42703') {
           const { data: retryData, error: retryError } = await supabase
             .from('pareceres')
-            .upsert({
-              id: parecerId,
-              user_id: currentUser.id,
-              analista: snapshot.analista || userName,
-              protocolo: snapshot.protocolo,
-              status,
-              tipo_documento: 'Parecer Técnico',
-              data: { ...payload, analista: snapshot.analista || userName },
-              updated_at: new Date().toISOString(),
-            })
+            .upsert(fallback42703Payload)
             .select()
             .single();
 

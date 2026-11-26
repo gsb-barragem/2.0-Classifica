@@ -971,3 +971,215 @@ export const getQuadro7RegulatorioRows = (resumoClass: string) => {
   }
   return [];
 };
+
+export function normalizeCondicaoAreaState(input?: {
+  condicaoArea?: unknown;
+  vigenciaContratoAnos?: unknown;
+  vigenciaInicio?: unknown;
+}): {
+  condicaoArea: '' | 'proprietario' | 'arrendatario';
+  vigenciaContratoAnos: string;
+  vigenciaInicio: string;
+} {
+  const condicaoArea: '' | 'proprietario' | 'arrendatario' =
+    input?.condicaoArea === 'proprietario' || input?.condicaoArea === 'arrendatario'
+      ? input.condicaoArea
+      : '';
+
+  const rawAnos = input?.vigenciaContratoAnos;
+  const vigenciaContratoAnos =
+    condicaoArea === 'arrendatario' && rawAnos !== undefined && rawAnos !== null
+      ? String(rawAnos)
+      : '';
+
+  const rawInicio = input?.vigenciaInicio;
+  const vigenciaInicio =
+    condicaoArea === 'arrendatario' && rawInicio !== undefined && rawInicio !== null
+      ? String(rawInicio)
+      : '';
+
+  return {
+    condicaoArea,
+    vigenciaContratoAnos,
+    vigenciaInicio,
+  };
+}
+
+export function applyParecerFieldChange(
+  prev: ParecerData,
+  field: keyof ParecerData,
+  value: any
+): ParecerData {
+  const updated: ParecerData = { ...prev, [field]: value };
+
+  // Preenche automaticamente UPG somente quando única; preserva quando houver múltiplas opções
+  if (field === 'municipio') {
+    const upgs = getUpgOptionsForMunicipality(value);
+    if (upgs.length === 1) {
+      updated.upg = upgs[0];
+    } else if (!value) {
+      updated.upg = '';
+    }
+  }
+
+  if (field === 'tipoClassificacao') {
+    const isPre = isPreClassificacaoTipo(value, false);
+    updated.classificacao = {
+      ...prev.classificacao,
+      criPreClassificacao: isPre,
+    };
+  }
+
+  if (field === 'condicaoArea' && value !== 'arrendatario') {
+    updated.vigenciaContratoAnos = '';
+    updated.vigenciaInicio = '';
+  }
+
+  return updated;
+}
+
+export function buildParecerSavePayloads(params: {
+  parecerId: string;
+  userId: string;
+  userName: string;
+  status: 'Rascunho' | 'Concluído';
+  snapshot: ParecerData;
+  nowIso?: string;
+}) {
+  const { parecerId, userId, userName, status, snapshot } = params;
+  const nowIso = params.nowIso || new Date().toISOString();
+  const { condicaoArea, vigenciaContratoAnos, vigenciaInicio } =
+    normalizeCondicaoAreaState(snapshot);
+
+  const payload = {
+    user_id: userId,
+    protocolo: snapshot.protocolo,
+    analista: snapshot.analista || userName,
+    analista_outro: snapshot.analistaOutro || null,
+    data_parecer: snapshot.data || null,
+    data_recebimento_processo: snapshot.dataRecebimentoProcesso || null,
+    razao_social: snapshot.razaoSocial,
+    cpf_cnpj: snapshot.cpfCnpj,
+    localizacao: snapshot.localizacao,
+    num_car: snapshot.numCAR,
+    municipio: snapshot.municipio,
+    finalidade: snapshot.finalidade,
+    finalidade_outro: snapshot.finalidadeOutro,
+    situacao_empreendimento: snapshot.situacaoEmpreendimento,
+    situacao_empreendimento_outro: snapshot.situacaoEmpreendimentoOutro,
+    curso_agua: snapshot.cursoAgua,
+    propriedades_limites: snapshot.propriedadesLimites,
+    sub_bacia: snapshot.subBacia,
+    upg: snapshot.upg,
+    area_bacia: snapshot.areaBacia,
+    indice_pluviosidade: snapshot.indicePluviosidade,
+    legenda_tabela1: snapshot.legendaTabela1,
+    tipo_classificacao: snapshot.tipoClassificacao,
+    tipo_classificacao_outro: snapshot.tipoClassificacaoOutro,
+    tipo_barragem: snapshot.tipoBarragem,
+    tipo_barragem_outro: snapshot.tipoBarragemOutro,
+    introducao: snapshot.introducao,
+    parecer_final: snapshot.parecer_final,
+    parecer_tecnico_numero: snapshot.parecerTecnicoNumero,
+    data_parecer_tecnico: snapshot.dataParecerTecnico || null,
+    portaria_numero: snapshot.portariaNumero,
+    data_portaria: snapshot.dataPortaria || null,
+    custom_portaria_text: snapshot.customPortariaText,
+    status,
+    tipo_documento: 'Parecer Técnico' as const,
+    data_conclusao:
+      status === 'Concluído'
+        ? nowIso
+        : snapshot.status === 'Concluído'
+        ? snapshot.dataConclusao
+        : null,
+    updated_at: nowIso,
+    dpa_class: snapshot.classificacao.dpaClass || null,
+    dpa1_select: snapshot.classificacao.dpa1Select,
+    dpa2_select: snapshot.classificacao.dpa2Select,
+    dpa3_select: snapshot.classificacao.dpa3Select,
+    dpa4_select: snapshot.classificacao.dpa4Select,
+    score_dpa1: snapshot.classificacao.scoreDpa1,
+    score_dpa2: snapshot.classificacao.scoreDpa2,
+    score_dpa3: snapshot.classificacao.scoreDpa3,
+    score_dpa4: snapshot.classificacao.scoreDpa4,
+    total_dpa: snapshot.classificacao.totalDpa,
+    ruptura_texto: snapshot.classificacao.rupturaTexto,
+    legenda_dpa: snapshot.classificacao.legendaDPA,
+    cri_pre_classificacao: snapshot.classificacao.criPreClassificacao,
+    ct6_select: snapshot.classificacao.ct6Select,
+    ec1_select: snapshot.classificacao.ec1Select,
+    ec2_select: snapshot.classificacao.ec2Select,
+    ec3_select: snapshot.classificacao.ec3Select,
+    ec4_select: snapshot.classificacao.ec4Select,
+    ec5_select: snapshot.classificacao.ec5Select,
+    ps1_select: snapshot.classificacao.ps1Select,
+    ps2_select: snapshot.classificacao.ps2Select,
+    ps3_select: snapshot.classificacao.ps3Select,
+    ps4_select: snapshot.classificacao.ps4Select,
+    ps5_select: snapshot.classificacao.ps5Select,
+    ps6_select: snapshot.classificacao.ps6Select,
+    score_ct1: snapshot.classificacao.scoreCt1,
+    score_ct2: snapshot.classificacao.scoreCt2,
+    score_ct3: snapshot.classificacao.scoreCt3,
+    score_ct4: snapshot.classificacao.scoreCt4,
+    score_ct5: snapshot.classificacao.scoreCt5,
+    score_ct6: snapshot.classificacao.scoreCt6,
+    score_ec1: snapshot.classificacao.scoreEc1,
+    score_ec2: snapshot.classificacao.scoreEc2,
+    score_ec3: snapshot.classificacao.scoreEc3,
+    score_ec4: snapshot.classificacao.scoreEc4,
+    score_ec5: snapshot.classificacao.scoreEc5,
+    score_ps1: snapshot.classificacao.scorePs1,
+    score_ps2: snapshot.classificacao.scorePs2,
+    score_ps3: snapshot.classificacao.scorePs3,
+    score_ps4: snapshot.classificacao.scorePs4,
+    score_ps5: snapshot.classificacao.scorePs5,
+    score_ps6: snapshot.classificacao.scorePs6,
+    total_ct: snapshot.classificacao.totalCT,
+    total_ec: snapshot.classificacao.totalEC,
+    total_ps: snapshot.classificacao.totalPS,
+    val_geral: snapshot.classificacao.valGeral,
+    risk_geral: snapshot.classificacao.riskGeral || null,
+    val_percolacao: snapshot.classificacao.valPercolacao,
+    risk_percolacao: snapshot.classificacao.riskPercolacao || null,
+    val_galgamento: snapshot.classificacao.valGalgamento,
+    risk_galgamento: snapshot.classificacao.riskGalgamento || null,
+    val_gerencial: snapshot.classificacao.valGerencial,
+    risk_gerencial: snapshot.classificacao.riskGerencial || null,
+    risco: snapshot.classificacao.risco || null,
+    resumo: snapshot.classificacao.resumo,
+    empreendedor_id: snapshot.empreendedorId || null,
+    barragem_id: snapshot.barragemId || snapshot.barragemPrincipal?.barragemId || null,
+    sistema_origem: snapshot.sistemaOrigem || 'CLASSIFICA_CSB',
+    data: {
+      empreendedorId: snapshot.empreendedorId || null,
+      barragemId: snapshot.barragemId || snapshot.barragemPrincipal?.barragemId || null,
+      sistemaOrigem: snapshot.sistemaOrigem || 'CLASSIFICA_CSB',
+      condicaoArea,
+      vigenciaContratoAnos,
+      vigenciaInicio,
+      responsaveisTecnicos: snapshot.responsaveisTecnicos || [],
+      barragemPrincipal: snapshot.barragemPrincipal,
+      barragensMontante: snapshot.barragensMontante || [],
+    },
+  };
+
+  const fallback42703Payload = {
+    id: parecerId,
+    user_id: userId,
+    analista: snapshot.analista || userName,
+    protocolo: snapshot.protocolo,
+    status,
+    tipo_documento: 'Parecer Técnico' as const,
+    data: {
+      ...payload,
+      ...payload.data,
+      analista: snapshot.analista || userName,
+    },
+    updated_at: nowIso,
+  };
+
+  return { payload, fallback42703Payload };
+}
+

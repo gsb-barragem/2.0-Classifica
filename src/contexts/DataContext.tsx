@@ -47,81 +47,76 @@ export const DataContext = createContext<DataContextType>({
   deleteTransferencia: async () => ({ success: false }),
 });
 
-export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [pareceres, setPareceres] = useState<ParecerData[]>([]);
-  const [oficios, setOficios] = useState<OficioData[]>([]);
-  const [noObligatoriedades, setNoObligatoriedades] = useState<NoObligatoryData[]>([]);
-  const [indeferimentos, setIndeferimentos] = useState<RejectionData[]>([]);
-  const [transferencias, setTransferencias] = useState<TransferData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const { currentUser } = useContext(AuthContext);
+export function mapParecerRowToParecerData(p: any): ParecerData {
+  // Map database fields to ParecerData interface
+  const principalBar = p.parecer_barramentos?.find((b: any) => b.is_principal);
+  const montanteBars = p.parecer_barramentos?.filter((b: any) => !b.is_principal) || [];
 
-  const fetchAllData = async () => {
-    if (!currentUser) return;
-    
-    setLoading(true);
-    try {
-      // Fetch Pareceres
-      const { data: pData, error: pError } = await supabase
-        .from('pareceres')
-        .select(`
-          *,
-          parecer_responsaveis (*),
-          parecer_documentos (*),
-          parecer_barramentos (
-            *,
-            parecer_estruturas (*)
-          )
-        `)
-        .order('data_parecer', { ascending: false });
+  const baseData = p.data || {};
+  const nestedBaseData =
+    baseData && typeof baseData.data === 'object' && baseData.data !== null
+      ? baseData.data
+      : {};
 
-      if (pError) {
-        console.warn('Tabela pareceres ainda não disponível no Supabase:', pError.message || pError.code);
-        setPareceres([]);
-      } else if (pData) {
-        const mappedPareceres: ParecerData[] = pData.map(p => {
-        // Map database fields to ParecerData interface
-        const principalBar = p.parecer_barramentos?.find((b: any) => b.is_principal);
-        const montanteBars = p.parecer_barramentos?.filter((b: any) => !b.is_principal) || [];
+  const rawCondicaoArea = baseData.condicaoArea ?? nestedBaseData.condicaoArea;
+  const condicaoArea: ParecerData['condicaoArea'] =
+    rawCondicaoArea === 'proprietario' || rawCondicaoArea === 'arrendatario'
+      ? rawCondicaoArea
+      : '';
+  const rawVigenciaAnos =
+    baseData.vigenciaContratoAnos ?? nestedBaseData.vigenciaContratoAnos;
+  const vigenciaContratoAnos =
+    condicaoArea === 'arrendatario' &&
+    rawVigenciaAnos !== undefined &&
+    rawVigenciaAnos !== null
+      ? String(rawVigenciaAnos)
+      : '';
+  const rawVigenciaInicio = baseData.vigenciaInicio ?? nestedBaseData.vigenciaInicio;
+  const vigenciaInicio =
+    condicaoArea === 'arrendatario' &&
+    rawVigenciaInicio !== undefined &&
+    rawVigenciaInicio !== null
+      ? String(rawVigenciaInicio)
+      : '';
 
-        const baseData = p.data || {};
-
-        return {
-          ...baseData,
-          id: p.id,
-          userId: p.user_id,
-          protocolo: p.protocolo || baseData.protocolo,
-          analista: p.analista || baseData.analista,
-          analistaOutro: p.analista_outro || baseData.analistaOutro,
-          data: p.data_parecer || baseData.data,
-          razaoSocial: p.razao_social || baseData.razaoSocial,
-          cpfCnpj: p.cpf_cnpj || baseData.cpfCnpj,
-          localizacao: p.localizacao || baseData.localizacao,
-          numCAR: p.num_car || baseData.numCAR,
-          municipio: p.municipio || baseData.municipio,
-          finalidade: p.finalidade || baseData.finalidade,
-          finalidadeOutro: p.finalidade_outro || baseData.finalidadeOutro,
-          situacaoEmpreendimento: p.situacao_empreendimento || baseData.situacaoEmpreendimento,
-          situacaoEmpreendimentoOutro: p.situacao_empreendimento_outro || baseData.situacaoEmpreendimentoOutro,
-          cursoAgua: p.curso_agua || baseData.cursoAgua,
-          propriedadesLimites: p.propriedades_limites || baseData.propriedadesLimites,
-          subBacia: p.sub_bacia || baseData.subBacia,
-          areaBacia: p.area_bacia || baseData.areaBacia,
-          indicePluviosidade: p.indice_pluviosidade || baseData.indicePluviosidade,
-          legendaTabela1: p.legenda_tabela1 || baseData.legendaTabela1,
-          tipoClassificacao: p.tipo_classificacao || baseData.tipoClassificacao,
-          tipoClassificacaoOutro: p.tipo_classificacao_outro || baseData.tipoClassificacaoOutro,
-          tipoBarragem: p.tipo_barragem || baseData.tipoBarragem,
-          tipoBarragemOutro: p.tipo_barragem_outro || baseData.tipoBarragemOutro,
-          introducao: p.introducao || baseData.introducao,
-          parecer_final: p.parecer_final || baseData.parecer_final || '',
-          status: (p.status || baseData.status || 'Rascunho') as 'Rascunho' | 'Concluído',
-          tipo_documento: 'Parecer Técnico' as const,
-          dataConclusao: p.data_conclusao || baseData.dataConclusao,
-          empreendedorId: p.empreendedor_id || baseData.empreendedorId,
-          barragemId: p.barragem_id || baseData.barragemId,
-          sistemaOrigem: p.sistema_origem || baseData.sistemaOrigem || 'CLASSIFICA_CSB',
-          
+  return {
+    ...baseData,
+    id: p.id,
+    userId: p.user_id,
+    protocolo: p.protocolo || baseData.protocolo,
+    analista: p.analista || baseData.analista,
+    analistaOutro: p.analista_outro || baseData.analistaOutro,
+    data: p.data_parecer || baseData.data,
+    razaoSocial: p.razao_social || baseData.razaoSocial,
+    cpfCnpj: p.cpf_cnpj || baseData.cpfCnpj,
+    localizacao: p.localizacao || baseData.localizacao,
+    numCAR: p.num_car || baseData.numCAR,
+    municipio: p.municipio || baseData.municipio,
+    finalidade: p.finalidade || baseData.finalidade,
+    finalidadeOutro: p.finalidade_outro || baseData.finalidadeOutro,
+    situacaoEmpreendimento: p.situacao_empreendimento || baseData.situacaoEmpreendimento,
+    situacaoEmpreendimentoOutro: p.situacao_empreendimento_outro || baseData.situacaoEmpreendimentoOutro,
+    cursoAgua: p.curso_agua || baseData.cursoAgua,
+    propriedadesLimites: p.propriedades_limites || baseData.propriedadesLimites,
+    subBacia: p.sub_bacia || baseData.subBacia,
+    areaBacia: p.area_bacia || baseData.areaBacia,
+    indicePluviosidade: p.indice_pluviosidade || baseData.indicePluviosidade,
+    legendaTabela1: p.legenda_tabela1 || baseData.legendaTabela1,
+    tipoClassificacao: p.tipo_classificacao || baseData.tipoClassificacao,
+    tipoClassificacaoOutro: p.tipo_classificacao_outro || baseData.tipoClassificacaoOutro,
+    tipoBarragem: p.tipo_barragem || baseData.tipoBarragem,
+    tipoBarragemOutro: p.tipo_barragem_outro || baseData.tipoBarragemOutro,
+    introducao: p.introducao || baseData.introducao,
+    parecer_final: p.parecer_final || baseData.parecer_final || '',
+    status: (p.status || baseData.status || 'Rascunho') as 'Rascunho' | 'Concluído',
+    tipo_documento: 'Parecer Técnico' as const,
+    dataConclusao: p.data_conclusao || baseData.dataConclusao,
+    empreendedorId: p.empreendedor_id || baseData.empreendedorId,
+    barragemId: p.barragem_id || baseData.barragemId,
+    sistemaOrigem: p.sistema_origem || baseData.sistemaOrigem || 'CLASSIFICA_CSB',
+    condicaoArea,
+    vigenciaContratoAnos,
+    vigenciaInicio,
           responsaveisTecnicos: p.parecer_responsaveis?.length > 0 
             ? p.parecer_responsaveis.map((rt: any, idx: number) => {
                 const baseRt = Array.isArray(baseData.responsaveisTecnicos)
@@ -299,7 +294,41 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           espolio: p.espolio || false,
           infoBarramento: p.info_barramento || ''
         };
-      });
+}
+
+export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [pareceres, setPareceres] = useState<ParecerData[]>([]);
+  const [oficios, setOficios] = useState<OficioData[]>([]);
+  const [noObligatoriedades, setNoObligatoriedades] = useState<NoObligatoryData[]>([]);
+  const [indeferimentos, setIndeferimentos] = useState<RejectionData[]>([]);
+  const [transferencias, setTransferencias] = useState<TransferData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { currentUser } = useContext(AuthContext);
+
+  const fetchAllData = async () => {
+    if (!currentUser) return;
+    
+    setLoading(true);
+    try {
+      // Fetch Pareceres
+      const { data: pData, error: pError } = await supabase
+        .from('pareceres')
+        .select(`
+          *,
+          parecer_responsaveis (*),
+          parecer_documentos (*),
+          parecer_barramentos (
+            *,
+            parecer_estruturas (*)
+          )
+        `)
+        .order('data_parecer', { ascending: false });
+
+      if (pError) {
+        console.warn('Tabela pareceres ainda não disponível no Supabase:', pError.message || pError.code);
+        setPareceres([]);
+      } else if (pData) {
+        const mappedPareceres: ParecerData[] = pData.map(mapParecerRowToParecerData);
 
       setPareceres(mappedPareceres);
     }

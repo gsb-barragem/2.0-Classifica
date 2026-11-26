@@ -1,5 +1,5 @@
 import React, { useContext, useState } from 'react';
-import { CheckCircle2, ChevronDown, ChevronUp, Database, Loader2, Unlink } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronUp, Database, Eraser, Loader2, Unlink } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   OPS_FINALIDADE,
@@ -28,6 +28,143 @@ interface Topic2PedidoEmpreendedorProps {
   onBatchUpdate: (updater: (prev: ParecerData) => ParecerData) => void;
   maskCpfCnpj: (value: string) => string;
 }
+
+export function getVigenciaContratoAnosWarning(value?: string): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return null;
+  if (!/^\d+$/.test(trimmed)) {
+    return 'Informe um número inteiro de 1 a 99 anos (aviso informativo; não bloqueia o salvamento).';
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 99) {
+    return 'A vigência esperada é de 1 a 99 anos (aviso informativo; não bloqueia o salvamento).';
+  }
+  return null;
+}
+
+interface CondicaoAreaEmpreendedorFieldsetProps {
+  condicaoArea?: '' | 'proprietario' | 'arrendatario';
+  vigenciaContratoAnos?: string;
+  vigenciaInicio?: string;
+  readOnly?: boolean;
+  onChangeCondicaoArea: (value: '' | 'proprietario' | 'arrendatario') => void;
+  onChangeVigenciaAnos: (value: string) => void;
+  onChangeVigenciaInicio: (value: string) => void;
+  onClear: () => void;
+}
+
+export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedorFieldsetProps> = ({
+  condicaoArea = '',
+  vigenciaContratoAnos = '',
+  vigenciaInicio = '',
+  readOnly = false,
+  onChangeCondicaoArea,
+  onChangeVigenciaAnos,
+  onChangeVigenciaInicio,
+  onClear,
+}) => {
+  const isArrendatario = condicaoArea === 'arrendatario';
+  const vigenciaAnosWarning = isArrendatario
+    ? getVigenciaContratoAnosWarning(vigenciaContratoAnos)
+    : null;
+
+  return (
+    <div className="col-span-1 md:col-span-2 rounded-lg border border-slate-200 bg-white/80 p-3 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <span className="block text-xs font-bold text-slate-600">
+            Condição do empreendedor na área
+          </span>
+          <p className="text-[11px] text-slate-500">
+            Opcional. Informação complementar para o cadastro.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={readOnly}
+          onClick={onClear}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-300 bg-white text-[11px] font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          title="Limpar condição na área"
+        >
+          <Eraser size={12} /> Limpar
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div>
+          <label
+            htmlFor="condicao-area-select"
+            className="block text-xs font-bold text-slate-500 mb-1"
+          >
+            Condição na área
+          </label>
+          <select
+            id="condicao-area-select"
+            disabled={readOnly}
+            className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-2 text-sm focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+            value={condicaoArea || ''}
+            onChange={(e) =>
+              onChangeCondicaoArea(
+                e.target.value as '' | 'proprietario' | 'arrendatario'
+              )
+            }
+          >
+            <option value="">Não informado</option>
+            <option value="proprietario">Proprietário</option>
+            <option value="arrendatario">Arrendatário</option>
+          </select>
+        </div>
+
+        {isArrendatario && (
+          <>
+            <div>
+              <label
+                htmlFor="vigencia-contrato-anos"
+                className="block text-xs font-bold text-slate-500 mb-1"
+              >
+                Vigência do contrato (anos)
+              </label>
+              <input
+                id="vigencia-contrato-anos"
+                type="number"
+                min={1}
+                max={99}
+                step={1}
+                disabled={readOnly || !isArrendatario}
+                placeholder="1 a 99"
+                className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-2 text-sm focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                value={vigenciaContratoAnos || ''}
+                onChange={(e) => onChangeVigenciaAnos(e.target.value)}
+              />
+              {vigenciaAnosWarning && (
+                <p className="text-[11px] text-amber-700 mt-1">
+                  {vigenciaAnosWarning}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label
+                htmlFor="vigencia-inicio"
+                className="block text-xs font-bold text-slate-500 mb-1"
+              >
+                Início da vigência
+              </label>
+              <input
+                id="vigencia-inicio"
+                type="date"
+                disabled={readOnly || !isArrendatario}
+                className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-2 text-sm focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                value={vigenciaInicio || ''}
+                onChange={(e) => onChangeVigenciaInicio(e.target.value)}
+              />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export const Topic2PedidoEmpreendedor: React.FC<Topic2PedidoEmpreendedorProps> = ({
   formData,
@@ -500,6 +637,26 @@ export const Topic2PedidoEmpreendedor: React.FC<Topic2PedidoEmpreendedorProps> =
                     onChange={(e) => onInputChange('localizacao', e.target.value)}
                   />
                 </div>
+
+                <CondicaoAreaEmpreendedorFieldset
+                  condicaoArea={formData.condicaoArea}
+                  vigenciaContratoAnos={formData.vigenciaContratoAnos}
+                  vigenciaInicio={formData.vigenciaInicio}
+                  readOnly={readOnly}
+                  onChangeCondicaoArea={(value) => onInputChange('condicaoArea', value)}
+                  onChangeVigenciaAnos={(value) =>
+                    onInputChange('vigenciaContratoAnos', value)
+                  }
+                  onChangeVigenciaInicio={(value) => onInputChange('vigenciaInicio', value)}
+                  onClear={() =>
+                    onBatchUpdate((prev) => ({
+                      ...prev,
+                      condicaoArea: '',
+                      vigenciaContratoAnos: '',
+                      vigenciaInicio: '',
+                    }))
+                  }
+                />
 
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">Município/UF</label>
