@@ -1005,6 +1005,69 @@ export function normalizeCondicaoAreaState(input?: {
   };
 }
 
+export function validateVigenciaContratoAnos(value?: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  if (!/^\d+$/.test(trimmed)) {
+    return 'Informe um número inteiro positivo para a vigência do contrato (anos).';
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return 'A vigência do contrato (anos) deve ser um número inteiro positivo maior que zero.';
+  }
+  return null;
+}
+
+export function validateVigenciaInicio(value?: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (!match) {
+    return 'Informe uma data válida para o início da vigência.';
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return 'Informe uma data válida para o início da vigência.';
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return 'Informe uma data válida para o início da vigência.';
+  }
+  return null;
+}
+
+export function validateCondicaoAreaData(input?: {
+  condicaoArea?: unknown;
+  vigenciaContratoAnos?: unknown;
+  vigenciaInicio?: unknown;
+}): {
+  valid: boolean;
+  anosError: string | null;
+  inicioError: string | null;
+  firstError: string | null;
+} {
+  if (input?.condicaoArea !== 'arrendatario') {
+    return { valid: true, anosError: null, inicioError: null, firstError: null };
+  }
+  const anosError = validateVigenciaContratoAnos(input.vigenciaContratoAnos);
+  const inicioError = validateVigenciaInicio(input.vigenciaInicio);
+  const firstError = anosError || inicioError || null;
+  return {
+    valid: !firstError,
+    anosError,
+    inicioError,
+    firstError,
+  };
+}
+
 export function applyParecerFieldChange(
   prev: ParecerData,
   field: keyof ParecerData,

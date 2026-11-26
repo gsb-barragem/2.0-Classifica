@@ -15,7 +15,11 @@ import {
   saveEmpreendedorMaster,
 } from '../../src/services/administraService';
 import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../../src/config/integrationArchitecture';
-import { getUpgOptionsForMunicipality } from '../../src/utils/opinionCalculations';
+import {
+  getUpgOptionsForMunicipality,
+  validateVigenciaContratoAnos,
+  validateVigenciaInicio,
+} from '../../src/utils/opinionCalculations';
 import { normalizeCoordinateToGMS } from '../../src/utils/coordinateUtils';
 
 interface Topic2PedidoEmpreendedorProps {
@@ -30,16 +34,11 @@ interface Topic2PedidoEmpreendedorProps {
 }
 
 export function getVigenciaContratoAnosWarning(value?: string): string | null {
-  const trimmed = (value ?? '').trim();
-  if (!trimmed) return null;
-  if (!/^\d+$/.test(trimmed)) {
-    return 'Informe um número inteiro de 1 a 99 anos (aviso informativo; não bloqueia o salvamento).';
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 99) {
-    return 'A vigência esperada é de 1 a 99 anos (aviso informativo; não bloqueia o salvamento).';
-  }
-  return null;
+  return validateVigenciaContratoAnos(value);
+}
+
+export function getVigenciaInicioWarning(value?: string): string | null {
+  return validateVigenciaInicio(value);
 }
 
 interface CondicaoAreaEmpreendedorFieldsetProps {
@@ -64,8 +63,11 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
   onClear,
 }) => {
   const isArrendatario = condicaoArea === 'arrendatario';
-  const vigenciaAnosWarning = isArrendatario
+  const vigenciaAnosError = isArrendatario
     ? getVigenciaContratoAnosWarning(vigenciaContratoAnos)
+    : null;
+  const vigenciaInicioError = isArrendatario
+    ? getVigenciaInicioWarning(vigenciaInicio)
     : null;
 
   return (
@@ -73,7 +75,7 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <span className="block text-xs font-bold text-slate-600">
-            Condição do empreendedor na área
+            Condição da área
           </span>
           <p className="text-[11px] text-slate-500">
             Opcional. Informação complementar para o cadastro.
@@ -84,7 +86,7 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
           disabled={readOnly}
           onClick={onClear}
           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-300 bg-white text-[11px] font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          title="Limpar condição na área"
+          title="Limpar condição da área"
         >
           <Eraser size={12} /> Limpar
         </button>
@@ -96,7 +98,7 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
             htmlFor="condicao-area-select"
             className="block text-xs font-bold text-slate-500 mb-1"
           >
-            Condição na área
+            Condição da área
           </label>
           <select
             id="condicao-area-select"
@@ -128,17 +130,21 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
                 id="vigencia-contrato-anos"
                 type="number"
                 min={1}
-                max={99}
                 step={1}
                 disabled={readOnly || !isArrendatario}
-                placeholder="1 a 99"
-                className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-2 text-sm focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                aria-invalid={Boolean(vigenciaAnosError)}
+                placeholder="Ex.: 5"
+                className={`w-full rounded-lg bg-[#F5F5F5] p-2 text-sm focus:bg-white focus:ring-2 shadow-sm transition-all outline-none disabled:opacity-60 disabled:cursor-not-allowed ${
+                  vigenciaAnosError
+                    ? 'border border-red-400 focus:border-red-500 focus:ring-red-200'
+                    : 'border-slate-400 focus:border-emerald-500 focus:ring-emerald-200'
+                }`}
                 value={vigenciaContratoAnos || ''}
                 onChange={(e) => onChangeVigenciaAnos(e.target.value)}
               />
-              {vigenciaAnosWarning && (
-                <p className="text-[11px] text-amber-700 mt-1">
-                  {vigenciaAnosWarning}
+              {vigenciaAnosError && (
+                <p role="alert" className="text-[11px] text-red-700 mt-1">
+                  {vigenciaAnosError}
                 </p>
               )}
             </div>
@@ -154,10 +160,20 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
                 id="vigencia-inicio"
                 type="date"
                 disabled={readOnly || !isArrendatario}
-                className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-2 text-sm focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                aria-invalid={Boolean(vigenciaInicioError)}
+                className={`w-full rounded-lg bg-[#F5F5F5] p-2 text-sm focus:bg-white focus:ring-2 shadow-sm transition-all outline-none disabled:opacity-60 disabled:cursor-not-allowed ${
+                  vigenciaInicioError
+                    ? 'border border-red-400 focus:border-red-500 focus:ring-red-200'
+                    : 'border-slate-400 focus:border-emerald-500 focus:ring-emerald-200'
+                }`}
                 value={vigenciaInicio || ''}
                 onChange={(e) => onChangeVigenciaInicio(e.target.value)}
               />
+              {vigenciaInicioError && (
+                <p role="alert" className="text-[11px] text-red-700 mt-1">
+                  {vigenciaInicioError}
+                </p>
+              )}
             </div>
           </>
         )}

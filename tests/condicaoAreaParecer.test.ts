@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   CondicaoAreaEmpreendedorFieldset,
   getVigenciaContratoAnosWarning,
+  getVigenciaInicioWarning,
 } from '../components/opinion/Topic2PedidoEmpreendedor';
 import { mapParecerRowToParecerData } from '../src/contexts/DataContext';
 import {
@@ -14,6 +15,9 @@ import {
   buildParecerSavePayloads,
   deriveClassification,
   normalizeCondicaoAreaState,
+  validateCondicaoAreaData,
+  validateVigenciaContratoAnos,
+  validateVigenciaInicio,
 } from '../src/utils/opinionCalculations';
 import { ParecerData } from '../types';
 
@@ -232,7 +236,7 @@ test('Salvar sem preencher os campos de condição na área não bloqueia e não
   assert.equal(fallback42703Payload.data.vigenciaInicio, '');
 });
 
-test('Arrendatário com anos exibe campos de vigência, inclui no payload JSONB e mostra aviso discreto só para valor inválido', () => {
+test('Arrendatário com anos e data exibe campos de vigência, inclui no payload JSONB e valida inteiro positivo e data válida', () => {
   const base = makeBaseParecer();
   let state = applyParecerFieldChange(base, 'condicaoArea', 'arrendatario');
   state = applyParecerFieldChange(state, 'vigenciaContratoAnos', '15');
@@ -242,15 +246,20 @@ test('Arrendatário com anos exibe campos de vigência, inclui no payload JSONB 
   assert.equal(state.vigenciaContratoAnos, '15');
   assert.equal(state.vigenciaInicio, '2026-03-01');
   assert.equal(getVigenciaContratoAnosWarning(state.vigenciaContratoAnos), null);
+  assert.equal(getVigenciaInicioWarning(state.vigenciaInicio), null);
+  assert.equal(validateCondicaoAreaData(state).valid, true);
 
   const html = renderTopic2(state, false);
-  assert.match(html, /Condição na área/);
+  assert.match(html, /Condição da área/);
+  assert.match(html, /Não informado/);
+  assert.match(html, /Proprietário/);
+  assert.match(html, /Arrendatário/);
   assert.match(html, /Opcional\. Informação complementar para o cadastro\./);
   assert.match(html, /Vigência do contrato \(anos\)/);
   assert.match(html, /Início da vigência/);
   assert.match(html, /value="15"/);
   assert.match(html, /value="2026-03-01"/);
-  assert.match(html, /title="Limpar condição na área"/);
+  assert.match(html, /title="Limpar condição da área"/);
 
   const { payload, fallback42703Payload } = buildParecerSavePayloads({
     parecerId: 'parecer-arrend-1',
@@ -266,23 +275,55 @@ test('Arrendatário com anos exibe campos de vigência, inclui no payload JSONB 
   assert.equal(fallback42703Payload.data.vigenciaContratoAnos, '15');
   assert.equal(fallback42703Payload.data.vigenciaInicio, '2026-03-01');
 
-  // Valor negativo mostra aviso discreto sem bloquear
-  const invalidState = applyParecerFieldChange(state, 'vigenciaContratoAnos', '-5');
-  const warning = getVigenciaContratoAnosWarning(invalidState.vigenciaContratoAnos);
-  assert.ok(warning && warning.includes('1 a 99 anos'));
-  assert.equal(getVigenciaContratoAnosWarning('0')?.includes('1 a 99 anos'), true);
-  assert.equal(getVigenciaContratoAnosWarning('100')?.includes('1 a 99 anos'), true);
-  assert.equal(getVigenciaContratoAnosWarning(''), null);
+  // Validação de inteiro positivo para anos
+  assert.equal(validateVigenciaContratoAnos(''), null);
+  assert.equal(validateVigenciaContratoAnos('1'), null);
+  assert.equal(validateVigenciaContratoAnos('100'), null);
+  assert.ok(validateVigenciaContratoAnos('-5'));
+  assert.ok(validateVigenciaContratoAnos('0'));
+  assert.ok(validateVigenciaContratoAnos('2.5'));
+  assert.ok(validateVigenciaContratoAnos('abc'));
+
+  // Validação de data válida para início da vigência
+  assert.equal(validateVigenciaInicio(''), null);
+  assert.equal(validateVigenciaInicio('2026-03-01'), null);
+  assert.equal(validateVigenciaInicio('2024-02-29'), null);
+  assert.ok(validateVigenciaInicio('2026-02-30'));
+  assert.ok(validateVigenciaInicio('2025-02-29'));
+  assert.ok(validateVigenciaInicio('2026-13-01'));
+  assert.ok(validateVigenciaInicio('01/03/2026'));
+  assert.ok(validateVigenciaInicio('abc'));
+
+  const invalidState = applyParecerFieldChange(
+    applyParecerFieldChange(state, 'vigenciaContratoAnos', '-5'),
+    'vigenciaInicio',
+    '2026-02-30'
+  );
+  const condicaoCheck = validateCondicaoAreaData(invalidState);
+  assert.equal(condicaoCheck.valid, false);
+  assert.ok(condicaoCheck.anosError);
+  assert.ok(condicaoCheck.inicioError);
 
   const invalidHtml = renderTopic2(invalidState, false);
-  assert.ok(invalidHtml.includes(warning));
+  assert.ok(invalidHtml.includes(condicaoCheck.anosError!));
+  assert.ok(invalidHtml.includes(condicaoCheck.inicioError!));
+
+  // Quando não for arrendatário, validação não bloqueia mesmo se houver resquício legado
+  assert.equal(
+    validateCondicaoAreaData({
+      condicaoArea: 'proprietario',
+      vigenciaContratoAnos: '0',
+      vigenciaInicio: '2026-02-30',
+    }).valid,
+    true
+  );
 
   // Modo readOnly desabilita select, inputs de vigência e botão Limpar
   const readOnlyHtml = renderTopic2(state, true);
   assert.match(readOnlyHtml, /id="condicao-area-select"[^>]*disabled/);
   assert.match(readOnlyHtml, /id="vigencia-contrato-anos"[^>]*disabled/);
   assert.match(readOnlyHtml, /id="vigencia-inicio"[^>]*disabled/);
-  assert.match(readOnlyHtml, /<button[^>]*disabled[^>]*title="Limpar condição na área"/);
+  assert.match(readOnlyHtml, /<button[^>]*disabled[^>]*title="Limpar condição da área"/);
 });
 
 test('Trocar de arrendatário para proprietário ou não informado limpa vigenciaContratoAnos e vigenciaInicio', () => {
@@ -390,7 +431,22 @@ test('Recarregar um parecer preserva os valores de condicaoArea e vigência no D
   assert.equal(reloadedLegacy.vigenciaInicio, '');
 });
 
-test('Contagem de funções serverless em api/ permanece exatamente 4', () => {
+test('OpinionForm valida condicaoArea no saveToSupabase, respeita fieldset readOnly e mantém Administra isolado', () => {
+  const opinionFormSource = fs.readFileSync(
+    path.resolve(process.cwd(), 'components/OpinionForm.tsx'),
+    'utf8'
+  );
+  assert.match(opinionFormSource, /validateCondicaoAreaData/);
+  assert.match(opinionFormSource, /<fieldset\s+disabled=\{readOnly\}/);
+
+  const apiEscritaSource = fs.readFileSync(
+    path.resolve(process.cwd(), 'api/administra-escrita.ts'),
+    'utf8'
+  );
+  assert.equal(apiEscritaSource.includes('condicaoArea'), false);
+  assert.equal(apiEscritaSource.includes('vigenciaContratoAnos'), false);
+  assert.equal(apiEscritaSource.includes('vigenciaInicio'), false);
+
   const apiDir = path.resolve(process.cwd(), 'api');
   const entries = fs
     .readdirSync(apiDir)

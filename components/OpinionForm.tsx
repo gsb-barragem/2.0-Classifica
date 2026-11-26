@@ -44,6 +44,7 @@ import {
   getUpgOptionsForMunicipality,
   isPreClassificacaoTipo,
   normalizeCondicaoAreaState,
+  validateCondicaoAreaData,
 } from '../src/utils/opinionCalculations';
 import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
 import { OperationType, handleSupabaseError } from '../src/utils/supabaseErrorHandler';
@@ -1129,6 +1130,12 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       toast.error(
         'Por favor, preencha todos os campos obrigatórios (Protocolo, Empreendedor e Município).'
       );
+      return;
+    }
+
+    const condicaoValidation = validateCondicaoAreaData(formData);
+    if (!condicaoValidation.valid && condicaoValidation.firstError) {
+      toast.error(condicaoValidation.firstError);
       return;
     }
 
