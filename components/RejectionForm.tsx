@@ -39,6 +39,7 @@ import ConfirmModal from './ui/ConfirmModal';
 import { EcosystemSelector, ResponsavelTecnicoSearchItem } from './EcosystemSelector';
 import {
   createResponsavelTecnicoInAdministra,
+  resolveNonMaskedAdministraText,
   saveBarragemMaster,
   saveEmpreendedorMaster,
   syncClassificaProductToAdministra,
@@ -1586,11 +1587,11 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
                       setFormData(prev => ({
                         ...prev,
                         empreendedorId: emp.id,
-                        nomeEmpreendedor: emp.razao_social || prev.nomeEmpreendedor,
-                        cpfCnpj: emp.cpf_cnpj || prev.cpfCnpj,
-                        enderecoEmpreendimento: emp.endereco || prev.enderecoEmpreendimento,
-                        municipioEmpreendimento: emp.municipio || prev.municipioEmpreendimento,
-                        numCar: emp.num_car || prev.numCar,
+                        nomeEmpreendedor: resolveNonMaskedAdministraText(emp.razao_social, prev.nomeEmpreendedor),
+                        cpfCnpj: resolveNonMaskedAdministraText(emp.cpf_cnpj, prev.cpfCnpj),
+                        enderecoEmpreendimento: resolveNonMaskedAdministraText(emp.endereco, prev.enderecoEmpreendimento),
+                        municipioEmpreendimento: resolveNonMaskedAdministraText(emp.municipio, prev.municipioEmpreendimento),
+                        numCar: resolveNonMaskedAdministraText(emp.num_car, prev.numCar),
                         sistemaOrigem: emp.sistema_origem || prev.sistemaOrigem,
                       }));
                     }}
@@ -1598,10 +1599,10 @@ const RejectionForm: React.FC<RejectionFormProps> = ({ initialData, onCancel, on
                       setFormData(prev => ({
                         ...prev,
                         barragemId: bar.id,
-                        nomeFazenda: bar.nome || prev.nomeFazenda,
+                        nomeFazenda: resolveNonMaskedAdministraText(bar.nome, prev.nomeFazenda),
                         empreendedorId: bar.empreendedor_id || prev.empreendedorId,
-                        municipioEmpreendimento: bar.municipio || prev.municipioEmpreendimento,
-                        enderecoEmpreendimento: bar.localizacao || prev.enderecoEmpreendimento,
+                        municipioEmpreendimento: resolveNonMaskedAdministraText(bar.municipio, prev.municipioEmpreendimento),
+                        enderecoEmpreendimento: resolveNonMaskedAdministraText(bar.localizacao, prev.enderecoEmpreendimento),
                         latEixo: normalizeCoordinateToGMS(bar.lat_gms, bar.lat_decimal) || prev.latEixo,
                         longEixo: normalizeCoordinateToGMS(bar.long_gms, bar.long_decimal) || prev.longEixo,
                         sistemaOrigem: bar.sistema_origem || prev.sistemaOrigem,

@@ -9,7 +9,11 @@ import {
 import { BarragemMaster, EmpreendedorMaster, ParecerData } from '../../types';
 import { EcosystemSelector, ResponsavelTecnicoSearchItem } from '../EcosystemSelector';
 import { AuthContext } from '../../src/contexts/AuthContext';
-import { saveBarragemMaster, saveEmpreendedorMaster } from '../../src/services/administraService';
+import {
+  resolveNonMaskedAdministraText,
+  saveBarragemMaster,
+  saveEmpreendedorMaster,
+} from '../../src/services/administraService';
 import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../../src/config/integrationArchitecture';
 import { getUpgOptionsForMunicipality } from '../../src/utils/opinionCalculations';
 import { normalizeCoordinateToGMS } from '../../src/utils/coordinateUtils';
@@ -264,55 +268,97 @@ export const Topic2PedidoEmpreendedor: React.FC<Topic2PedidoEmpreendedorProps> =
               savingToAdministra={savingToAdministra}
               onSaveToAdministra={handleSaveToAdministra}
               onSelectEmpreendedor={(emp: EmpreendedorMaster) => {
-                onBatchUpdate((prev) => ({
-                  ...prev,
-                  empreendedorId: emp.id,
-                  razaoSocial: emp.razao_social || prev.razaoSocial,
-                  cpfCnpj: emp.cpf_cnpj ? maskCpfCnpj(emp.cpf_cnpj) : prev.cpfCnpj,
-                  localizacao: emp.endereco || prev.localizacao,
-                  municipio: emp.municipio || prev.municipio,
-                  numCAR: emp.num_car || prev.numCAR,
-                }));
+                onBatchUpdate((prev) => {
+                  const safeCpfCnpj = resolveNonMaskedAdministraText(emp.cpf_cnpj, '');
+                  return {
+                    ...prev,
+                    empreendedorId: emp.id,
+                    razaoSocial: resolveNonMaskedAdministraText(emp.razao_social, prev.razaoSocial),
+                    cpfCnpj: safeCpfCnpj ? maskCpfCnpj(safeCpfCnpj) : prev.cpfCnpj,
+                    localizacao: resolveNonMaskedAdministraText(emp.endereco, prev.localizacao),
+                    municipio: resolveNonMaskedAdministraText(emp.municipio, prev.municipio),
+                    numCAR: resolveNonMaskedAdministraText(emp.num_car, prev.numCAR),
+                  };
+                });
               }}
               onSelectBarragem={(bar: BarragemMaster) => {
-                onBatchUpdate((prev) => ({
-                  ...prev,
-                  barragemId: bar.id,
-                  empreendedorId: bar.empreendedor_id || prev.empreendedorId,
-                  razaoSocial: prev.razaoSocial || bar.empreendedor_nome || '',
-                  cpfCnpj:
-                    prev.cpfCnpj ||
-                    (bar.empreendedor_cpf_cnpj ? maskCpfCnpj(bar.empreendedor_cpf_cnpj) : ''),
-                  localizacao: prev.localizacao || bar.localizacao || '',
-                  municipio: bar.municipio || prev.municipio,
-                  upg: bar.upg || prev.upg,
-                  subBacia: bar.sub_bacia || prev.subBacia,
-                  cursoAgua: bar.curso_agua || prev.cursoAgua,
-                  finalidade: prev.finalidade || bar.finalidade || '',
-                  situacaoEmpreendimento: prev.situacaoEmpreendimento || bar.situacao || '',
-                  barragemPrincipal: {
-                    ...prev.barragemPrincipal,
+                onBatchUpdate((prev) => {
+                  const safeEmpCpfCnpj = resolveNonMaskedAdministraText(
+                    bar.empreendedor_cpf_cnpj,
+                    ''
+                  );
+                  return {
+                    ...prev,
                     barragemId: bar.id,
-                    sistemaOrigem: bar.sistema_origem || 'ADMINISTRA_BARRAGENS',
-                    nome: bar.nome || prev.barragemPrincipal.nome,
-                    snisb: bar.snisb || prev.barragemPrincipal.snisb,
-                    lat:
-                      normalizeCoordinateToGMS(bar.lat_gms, bar.lat_decimal) ||
-                      prev.barragemPrincipal.lat,
-                    long:
-                      normalizeCoordinateToGMS(bar.long_gms, bar.long_decimal) ||
-                      prev.barragemPrincipal.long,
-                    alturaMaxima: bar.altura_maxima || prev.barragemPrincipal.alturaMaxima,
-                    comprimentoCoroamento:
-                      bar.comprimento_coroamento || prev.barragemPrincipal.comprimentoCoroamento,
-                    larguraCoroamento:
-                      bar.largura_coroamento || prev.barragemPrincipal.larguraCoroamento,
-                    volumeNMO: bar.volume_nmo || prev.barragemPrincipal.volumeNMO,
-                    volumeNMM: bar.volume_nmm || prev.barragemPrincipal.volumeNMM,
-                    tipoEstrutural: bar.tipo_estrutural || prev.barragemPrincipal.tipoEstrutural,
-                    tipoFundacao: bar.tipo_fundacao || prev.barragemPrincipal.tipoFundacao,
-                  },
-                }));
+                    empreendedorId: bar.empreendedor_id || prev.empreendedorId,
+                    razaoSocial:
+                      prev.razaoSocial ||
+                      resolveNonMaskedAdministraText(bar.empreendedor_nome, ''),
+                    cpfCnpj:
+                      prev.cpfCnpj ||
+                      (safeEmpCpfCnpj ? maskCpfCnpj(safeEmpCpfCnpj) : ''),
+                    localizacao:
+                      prev.localizacao ||
+                      resolveNonMaskedAdministraText(bar.localizacao, ''),
+                    municipio: resolveNonMaskedAdministraText(bar.municipio, prev.municipio),
+                    upg: resolveNonMaskedAdministraText(bar.upg, prev.upg),
+                    subBacia: resolveNonMaskedAdministraText(bar.sub_bacia, prev.subBacia),
+                    cursoAgua: resolveNonMaskedAdministraText(bar.curso_agua, prev.cursoAgua),
+                    finalidade:
+                      prev.finalidade ||
+                      resolveNonMaskedAdministraText(bar.finalidade, ''),
+                    situacaoEmpreendimento:
+                      prev.situacaoEmpreendimento ||
+                      resolveNonMaskedAdministraText(bar.situacao, ''),
+                    barragemPrincipal: {
+                      ...prev.barragemPrincipal,
+                      barragemId: bar.id,
+                      sistemaOrigem: bar.sistema_origem || 'ADMINISTRA_BARRAGENS',
+                      nome: resolveNonMaskedAdministraText(
+                        bar.nome,
+                        prev.barragemPrincipal.nome
+                      ),
+                      snisb: resolveNonMaskedAdministraText(
+                        bar.snisb,
+                        prev.barragemPrincipal.snisb
+                      ),
+                      lat:
+                        normalizeCoordinateToGMS(bar.lat_gms, bar.lat_decimal) ||
+                        prev.barragemPrincipal.lat,
+                      long:
+                        normalizeCoordinateToGMS(bar.long_gms, bar.long_decimal) ||
+                        prev.barragemPrincipal.long,
+                      alturaMaxima: resolveNonMaskedAdministraText(
+                        bar.altura_maxima,
+                        prev.barragemPrincipal.alturaMaxima
+                      ),
+                      comprimentoCoroamento: resolveNonMaskedAdministraText(
+                        bar.comprimento_coroamento,
+                        prev.barragemPrincipal.comprimentoCoroamento
+                      ),
+                      larguraCoroamento: resolveNonMaskedAdministraText(
+                        bar.largura_coroamento,
+                        prev.barragemPrincipal.larguraCoroamento
+                      ),
+                      volumeNMO: resolveNonMaskedAdministraText(
+                        bar.volume_nmo,
+                        prev.barragemPrincipal.volumeNMO
+                      ),
+                      volumeNMM: resolveNonMaskedAdministraText(
+                        bar.volume_nmm,
+                        prev.barragemPrincipal.volumeNMM
+                      ),
+                      tipoEstrutural: resolveNonMaskedAdministraText(
+                        bar.tipo_estrutural,
+                        prev.barragemPrincipal.tipoEstrutural
+                      ),
+                      tipoFundacao: resolveNonMaskedAdministraText(
+                        bar.tipo_fundacao,
+                        prev.barragemPrincipal.tipoFundacao
+                      ),
+                    },
+                  };
+                });
               }}
               onSelectRT={(rt: ResponsavelTecnicoSearchItem) => {
                 const art = (rt.art || '').trim();

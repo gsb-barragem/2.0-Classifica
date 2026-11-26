@@ -12,6 +12,7 @@ import { generateOficioDoc } from '../services/docxService';
 import { EcosystemSelector, ResponsavelTecnicoSearchItem } from './EcosystemSelector';
 import {
   createResponsavelTecnicoInAdministra,
+  resolveNonMaskedAdministraText,
   saveBarragemMaster,
   saveEmpreendedorMaster,
   syncClassificaProductToAdministra,
@@ -601,9 +602,9 @@ const OficioForm: React.FC<OficioFormProps> = ({ onBack, initialData, readOnly }
                     setFormData(prev => ({
                       ...prev,
                       empreendedorId: emp.id,
-                      interessado: emp.razao_social || prev.interessado,
-                      cpfCnpj: emp.cpf_cnpj || prev.cpfCnpj,
-                      municipio: emp.municipio || prev.municipio,
+                      interessado: resolveNonMaskedAdministraText(emp.razao_social, prev.interessado),
+                      cpfCnpj: resolveNonMaskedAdministraText(emp.cpf_cnpj, prev.cpfCnpj),
+                      municipio: resolveNonMaskedAdministraText(emp.municipio, prev.municipio),
                       sistemaOrigem: emp.sistema_origem || prev.sistemaOrigem,
                     }));
                   }}
@@ -611,9 +612,9 @@ const OficioForm: React.FC<OficioFormProps> = ({ onBack, initialData, readOnly }
                     setFormData(prev => ({
                       ...prev,
                       barragemId: bar.id,
-                      barragemNome: bar.nome || prev.barragemNome,
+                      barragemNome: resolveNonMaskedAdministraText(bar.nome, prev.barragemNome),
                       empreendedorId: bar.empreendedor_id || prev.empreendedorId,
-                      municipio: bar.municipio || prev.municipio,
+                      municipio: resolveNonMaskedAdministraText(bar.municipio, prev.municipio),
                       lat: normalizeCoordinateToGMS(bar.lat_gms, bar.lat_decimal) || prev.lat,
                       long: normalizeCoordinateToGMS(bar.long_gms, bar.long_decimal) || prev.long,
                       sistemaOrigem: bar.sistema_origem || prev.sistemaOrigem,

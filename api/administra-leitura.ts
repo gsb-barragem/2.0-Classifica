@@ -870,7 +870,8 @@ function parseBarragemV2Item(raw: unknown): BarragemV2Dto | null {
 function parseBarragensV2Response(
   rawBody: unknown,
   headers: Headers,
-  requestedLimit?: number
+  requestedLimit?: number,
+  requestedCursor?: string
 ):
   | {
       ok: true;
@@ -977,6 +978,22 @@ function parseBarragensV2Response(
     hasMore = nextCursor !== null;
   }
 
+  if (hasMore && !nextCursor) {
+    return {
+      ok: false,
+      code: 'INVALID_PAGINATION',
+      error: 'Paginação inválida na resposta do serviço Administra v2: hasMore sem nextCursor.',
+    };
+  }
+
+  if (requestedCursor && nextCursor && nextCursor === requestedCursor) {
+    return {
+      ok: false,
+      code: 'REPEATED_CURSOR',
+      error: 'Cursor repetido detectado na resposta do serviço Administra v2.',
+    };
+  }
+
   const rawTotal = pagSource.total;
   let total: number | null = null;
   if (rawTotal !== undefined && rawTotal !== null) {
@@ -1031,6 +1048,7 @@ function classifyS2sError(err: unknown): {
     }
     const msg = err.message;
     if (
+      msg.includes('ADMINISTRA_API_URL') ||
       msg.includes('ADMINISTRA_API_BASE_URL') ||
       msg.includes('CLASSIFICA_S2S_KID') ||
       msg.includes('CLASSIFICA_S2S_PRIVATE_KEY')
@@ -1143,7 +1161,8 @@ export function createAdministraLeituraHandler(deps: AdministraLeituraDeps = {})
     const validated = parseBarragensV2Response(
       upstream.body,
       upstream.headers,
-      parsedParams.limit
+      parsedParams.limit,
+      parsedParams.cursor
     );
     if (validated.ok === false) {
       sendJson(res, 502, {

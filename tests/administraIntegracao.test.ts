@@ -15,10 +15,6 @@ import {
   AdministraLeituraDeps,
   createAdministraLeituraHandler,
 } from '../api/administra-leitura';
-import {
-  buildS2sV2CanonicalString,
-  canonicalizeS2sQuery,
-} from '../server/administraS2sHealth';
 import { createApiApp } from '../server';
 import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../src/config/integrationArchitecture';
 
@@ -540,23 +536,40 @@ test('/api/administra-leitura action barragens_v2 assina S2S-V2 com query exata,
     observedQuery = parsedUrl.search.replace(/^\?/, '');
     observedContentType = req.headers['content-type'];
 
-    const canonical = buildS2sV2CanonicalString({
-      method: observedMethod,
-      path: observedPath,
-      query: canonicalizeS2sQuery(observedQuery),
-      contentType: observedContentType || '',
-      bodySha256: String(req.headers['x-s2s-body-sha256'] || ''),
-      keyId: String(req.headers['x-s2s-key-id'] || ''),
-      timestamp: String(req.headers['x-s2s-timestamp'] || ''),
-      jti: String(req.headers['x-s2s-jti'] || ''),
-    });
+    let observedAuthHeader: string | undefined;
+    let observedConsumerHeaders: string[] = [];
 
-    verifiedSignature = crypto.verify(
-      null,
-      Buffer.from(canonical, 'utf8'),
-      publicKey,
-      Buffer.from(String(req.headers['x-s2s-signature'] || ''), 'base64')
+    observedAuthHeader = req.headers.authorization;
+    observedConsumerHeaders = Object.keys(req.headers).filter((h) =>
+      h.toLowerCase().startsWith('x-consumer-')
     );
+
+    const timestamp = String(req.headers['x-s2s-timestamp'] || '');
+    const jti = String(req.headers['x-s2s-jti'] || '');
+    const sig = String(req.headers['x-s2s-signature'] || '');
+
+    const expectedCanonicalLiteral =
+      'S2S-V2\n' +
+      'GET\n' +
+      '/api/v2/barragens\n' +
+      'cursor=cursor-page-1%3D%3D&limit=25\n' +
+      '\n' +
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n' +
+      'classifica-ed25519-test-v2\n' +
+      `${timestamp}\n` +
+      `${jti}\n` +
+      '|';
+
+    verifiedSignature =
+      observedAuthHeader === undefined &&
+      observedConsumerHeaders.length === 0 &&
+      !/[+/=]/.test(sig) &&
+      crypto.verify(
+        null,
+        Buffer.from(expectedCanonicalLiteral, 'utf8'),
+        publicKey,
+        Buffer.from(sig, 'base64url')
+      );
 
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
@@ -625,7 +638,7 @@ test('/api/administra-leitura action barragens_v2 assina S2S-V2 com query exata,
             error: 'ADMINISTRA_SUPABASE_* ausente',
           }),
           s2sEnv: {
-            ADMINISTRA_API_BASE_URL: mockBaseUrl,
+            ADMINISTRA_API_URL: mockBaseUrl,
             CLASSIFICA_S2S_KID: keyId,
             CLASSIFICA_S2S_PRIVATE_KEY: privateKeyPem,
           },
@@ -1713,6 +1726,359 @@ test('EcosystemHub tabela Barragens v2 formata coordenadas válidas em GMS com d
   assert.equal(decodedHtml.includes('181.2'), false);
   const emDashCoordMatches = decodedHtml.match(/Lat\/Long:<\/span>\s*— \/ —/g) || [];
   assert.equal(emDashCoordMatches.length, 3);
+});
+
+test('paginação v2 rejeita cursor repetido, hasMore sem nextCursor, teto de páginas e nunca transforma erro em resultado parcial', async () => {
+  const {
+    fetchBarragensV2Page,
+    fetchAllBarragensV2Pages,
+  } = await import('../src/services/administraService');
+  const { advanceBarragensV2Cursor } = await import('../components/EcosystemHub');
+
+  // 1. Server endpoint (/api/administra-leitura) rejeita cursor repetido e hasMore sem nextCursor com HTTP 502 sem itens
+  await withServer(
+    {
+      leituraDeps: {
+        verifySession: async () => ({
+          ok: true,
+          userId: 'user-1',
+          classificaUrl: 'https://classifica.example.supabase.co',
+        }),
+        requestS2sGet: async () => ({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'x-masking-policy': 'masked' }),
+          body: {
+            maskingPolicy: 'masked',
+            pagination: { limit: 10, nextCursor: 'cur_loop', hasMore: true, total: 20 },
+            items: [{ id: 'b1', nome: 'Barragem Parcial Proibida' }],
+          },
+        }),
+      },
+    },
+    async (baseUrl) => {
+      const repeatedRes = await fetch(`${baseUrl}/api/administra-leitura`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer valid-session-token',
+        },
+        body: JSON.stringify({ action: 'barragens_v2', limit: 10, cursor: 'cur_loop' }),
+      });
+      assert.equal(repeatedRes.status, 502);
+      const repeatedText = await repeatedRes.text();
+      assert.equal(repeatedText.includes('Barragem Parcial Proibida'), false);
+      assert.equal(JSON.parse(repeatedText).code, 'REPEATED_CURSOR');
+    }
+  );
+
+  // 2. fetchBarragensV2Page rejeita cursor repetido e hasMore=true com nextCursor=null
+  const singleRepeated = await fetchBarragensV2Page(
+    { limit: 10, cursor: 'cur_1' },
+    {
+      getAccessToken: async () => 'token',
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            maskingPolicy: 'masked',
+            pagination: { limit: 10, nextCursor: 'cur_1', hasMore: true, total: 10 },
+            items: [{ id: 'b1', nome: 'Barragem 1' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        ),
+    }
+  );
+  assert.equal(singleRepeated.ok, false);
+  assert.equal(singleRepeated.data.length, 0);
+  assert.equal(singleRepeated.error?.code, 'REPEATED_CURSOR');
+
+  const singleMissingNext = await fetchBarragensV2Page(
+    { limit: 10 },
+    {
+      getAccessToken: async () => 'token',
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            maskingPolicy: 'masked',
+            pagination: { limit: 10, nextCursor: null, hasMore: true, total: 10 },
+            items: [{ id: 'b1', nome: 'Barragem 1' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        ),
+    }
+  );
+  assert.equal(singleMissingNext.ok, false);
+  assert.equal(singleMissingNext.data.length, 0);
+  assert.equal(singleMissingNext.error?.code, 'INVALID_PAGINATION');
+
+  // 3. fetchAllBarragensV2Pages concatena páginas via nextCursor até hasMore=false
+  let callNum = 0;
+  const allOk = await fetchAllBarragensV2Pages(
+    { limit: 2, maxPages: 5 },
+    {
+      getAccessToken: async () => 'token',
+      fetchImpl: async (_input, init) => {
+        callNum += 1;
+        const sent = JSON.parse(String(init?.body || '{}')) as { cursor?: string };
+        if (callNum === 1) {
+          assert.equal(sent.cursor, undefined);
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              maskingPolicy: 'masked',
+              pagination: { limit: 2, nextCursor: 'cur_p2', hasMore: true, total: 3 },
+              items: [
+                { id: 'b1', nome: 'Barragem 1' },
+                { id: 'b2', nome: 'Barragem 2' },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        assert.equal(sent.cursor, 'cur_p2');
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            maskingPolicy: 'masked',
+            pagination: { limit: 2, nextCursor: null, hasMore: false, total: 3 },
+            items: [{ id: 'b3', nome: 'Barragem 3' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      },
+    }
+  );
+  assert.equal(allOk.ok, true);
+  assert.equal(allOk.maskingPolicy, 'masked');
+  assert.equal(allOk.pagesFetched, 2);
+  assert.deepEqual(
+    allOk.data.map((d) => d.id),
+    ['b1', 'b2', 'b3']
+  );
+
+  // 4. Cursor repetido não-adjacente (p1 -> cur_2 -> cur_1 -> cur_2) rejeita e descarta dados parciais
+  let cycleStep = 0;
+  const cyclic = await fetchAllBarragensV2Pages(
+    { limit: 1, maxPages: 10 },
+    {
+      getAccessToken: async () => 'token',
+      fetchImpl: async () => {
+        cycleStep += 1;
+        const nextCursor = cycleStep % 2 === 1 ? 'cur_a' : 'cur_b';
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            maskingPolicy: 'masked',
+            pagination: { limit: 1, nextCursor, hasMore: true, total: 99 },
+            items: [{ id: `b-${cycleStep}`, nome: `Barragem ${cycleStep}` }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      },
+    }
+  );
+  assert.equal(cyclic.ok, false);
+  assert.equal(cyclic.data.length, 0);
+  assert.equal(cyclic.maskingPolicy, null);
+  assert.equal(cyclic.error?.code, 'REPEATED_CURSOR');
+
+  // 5. Teto de páginas rejeita paginação infinita sem retornar resultado parcial
+  let capStep = 0;
+  const capped = await fetchAllBarragensV2Pages(
+    { limit: 1, maxPages: 2 },
+    {
+      getAccessToken: async () => 'token',
+      fetchImpl: async () => {
+        capStep += 1;
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            maskingPolicy: 'masked',
+            pagination: { limit: 1, nextCursor: `cur_seq_${capStep}`, hasMore: true, total: 99 },
+            items: [{ id: `b-${capStep}`, nome: `Barragem ${capStep}` }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      },
+    }
+  );
+  assert.equal(capped.ok, false);
+  assert.equal(capped.data.length, 0);
+  assert.equal(capped.error?.code, 'PAGINATION_LIMIT_EXCEEDED');
+
+  // 6. Erro na página 2 descarta página 1 (erro nunca vira resultado parcial)
+  let failStep = 0;
+  const midError = await fetchAllBarragensV2Pages(
+    { limit: 1, maxPages: 5 },
+    {
+      getAccessToken: async () => 'token',
+      fetchImpl: async () => {
+        failStep += 1;
+        if (failStep === 1) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              maskingPolicy: 'masked',
+              pagination: { limit: 1, nextCursor: 'cur_2', hasMore: true, total: 2 },
+              items: [{ id: 'b-1', nome: 'Barragem 1' }],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(
+          JSON.stringify({ ok: false, code: 'ADMINISTRA_V2_UPSTREAM_ERROR', error: 'Falha p2' }),
+          { status: 502, headers: { 'Content-Type': 'application/json' } }
+        );
+      },
+    }
+  );
+  assert.equal(midError.ok, false);
+  assert.equal(midError.data.length, 0);
+  assert.equal(midError.maskingPolicy, null);
+
+  // 7. advanceBarragensV2Cursor rejeita cursor já visto no histórico e respeita teto
+  const histState = { cursorHistory: [null, 'cur_a', 'cur_b'], cursorPageIndex: 2 };
+  assert.deepEqual(
+    advanceBarragensV2Cursor(histState, { hasMore: true, nextCursor: 'cur_a' }),
+    histState
+  );
+  assert.deepEqual(
+    advanceBarragensV2Cursor(histState, { hasMore: true, nextCursor: 'cur_c' }, 3),
+    histState
+  );
+});
+
+test('dados mascarados do Administra nunca apagam nem sobrescrevem dados locais já preenchidos', async () => {
+  const {
+    mapBarragemV2ToMaster,
+    mergeBarragemMasterPreservingLocal,
+    mergeBarragemV2IntoMasterPreservingLocal,
+    resolveNonMaskedAdministraText,
+  } = await import('../src/services/administraService');
+
+  // 1. resolveNonMaskedAdministraText preserva dado local quando entrada está mascarada ou vazia
+  assert.equal(resolveNonMaskedAdministraText('***', 'SNISB-LOCAL-01'), 'SNISB-LOCAL-01');
+  assert.equal(resolveNonMaskedAdministraText('[REDACTED]', 'Cuiabá'), 'Cuiabá');
+  assert.equal(resolveNonMaskedAdministraText('mascarado', 'Rio Cuiabá'), 'Rio Cuiabá');
+  assert.equal(resolveNonMaskedAdministraText('***.***.***-**', '12.345.678/0001-90'), '12.345.678/0001-90');
+  assert.equal(resolveNonMaskedAdministraText(null, '32.5'), '32.5');
+  assert.equal(resolveNonMaskedAdministraText('', 'Alto'), 'Alto');
+  assert.equal(resolveNonMaskedAdministraText('—', 'Ativa'), 'Ativa');
+  assert.equal(resolveNonMaskedAdministraText('Sinop', ''), 'Sinop');
+
+  // 2. mapBarragemV2ToMaster rejeita placeholders mascarados em campos textuais e coordenadas
+  const mappedMasked = mapBarragemV2ToMaster({
+    id: 'bar-v2-masked',
+    nome: '***',
+    car: '[REDACTED]',
+    uf: 'MT',
+    municipio: 'mascarado',
+    municipio_ibge: null,
+    empreendimento: null,
+    processo: null,
+    snisb: '***',
+    curso_agua: '—',
+    latitude: '-15.60**',
+    longitude: '56°05\'**',
+    altura: '***',
+    volume: 500000,
+    dano_potencial: 'N/A',
+    categoria_risco: '--',
+    classificada_em: null,
+    situacao: 'oculto',
+    empreendedor_id: '***',
+  });
+  assert.equal(mappedMasked.nome, 'Barragem sem nome');
+  assert.equal(mappedMasked.municipio, '');
+  assert.equal(mappedMasked.snisb, null);
+  assert.equal(mappedMasked.curso_agua, null);
+  assert.equal(mappedMasked.altura_maxima, null);
+  assert.equal(mappedMasked.dpa_atual, null);
+  assert.equal(mappedMasked.cri_atual, null);
+  assert.equal(mappedMasked.situacao, null);
+  assert.equal(mappedMasked.empreendedor_id, null);
+  assert.equal(mappedMasked.lat_decimal, null);
+  assert.equal(mappedMasked.long_decimal, null);
+  assert.equal(mappedMasked.lat_gms, null);
+  assert.equal(mappedMasked.long_gms, null);
+
+  // 3. mergeBarragemV2IntoMasterPreservingLocal e mergeBarragemMasterPreservingLocal preservam integralmente campos locais
+  const localRecord = {
+    id: 'bar-v2-masked',
+    empreendedor_id: 'emp-local-99',
+    empreendedor_nome: 'Empreendedor Local Ltda',
+    empreendedor_cpf_cnpj: '12345678000190',
+    snisb: 'SNISB-LOCAL-777',
+    nome: 'Barragem Fazenda Local',
+    municipio: 'Sorriso',
+    upg: 'UPG-LOCAL',
+    sub_bacia: 'Teles Pires',
+    curso_agua: 'Rio Lira',
+    zona: 'Rural' as const,
+    localizacao: 'Rodovia MT-242 Km 10',
+    lat_decimal: -12.54,
+    long_decimal: -55.71,
+    lat_gms: '12°32\'24,00"',
+    long_gms: '55°42\'36,00"',
+    altura_maxima: '22.0',
+    comprimento_coroamento: '180',
+    largura_coroamento: '6',
+    volume_nmo: '450000',
+    volume_nmm: '620000',
+    tipo_estrutural: 'Terra Homogênea',
+    tipo_fundacao: 'Solo Residual',
+    finalidade: 'Irrigação',
+    situacao: 'Em Operação',
+    dpa_atual: 'Alto',
+    cri_atual: 'Médio',
+    enquadramento_pnsb: true,
+    sistema_origem: 'CLASSIFICA_CSB' as const,
+  };
+
+  const mergedFromV2 = mergeBarragemV2IntoMasterPreservingLocal(localRecord, {
+    id: 'bar-v2-masked',
+    nome: '***',
+    car: null,
+    uf: 'MT',
+    municipio: 'mascarado',
+    municipio_ibge: null,
+    empreendimento: null,
+    processo: null,
+    snisb: '***',
+    curso_agua: '[REDACTED]',
+    latitude: '***',
+    longitude: null,
+    altura: '***',
+    volume: 999999,
+    dano_potencial: 'Baixo',
+    categoria_risco: 'Baixo',
+    classificada_em: null,
+    situacao: null,
+    empreendedor_id: '***',
+  });
+
+  assert.deepEqual(mergedFromV2, localRecord);
+
+  // Apenas campos locais vazios podem ser enriquecidos com valores NÃO mascarados
+  const partialLocal = {
+    ...localRecord,
+    snisb: null,
+    curso_agua: '',
+    situacao: null,
+  };
+  const enriched = mergeBarragemMasterPreservingLocal(partialLocal, {
+    ...localRecord,
+    snisb: '***', // mascarado: NÃO preenche nem sobrescreve
+    curso_agua: 'Rio Teles Pires', // válido: enriquece campo vazio
+    situacao: 'Ativa', // válido: enriquece campo nulo
+    empreendedor_cpf_cnpj: '***.***.***-**', // mascarado: NÃO sobrescreve local preenchido
+  });
+  assert.equal(enriched.snisb, null);
+  assert.equal(enriched.curso_agua, 'Rio Teles Pires');
+  assert.equal(enriched.situacao, 'Ativa');
+  assert.equal(enriched.empreendedor_cpf_cnpj, '12345678000190');
 });
 
 

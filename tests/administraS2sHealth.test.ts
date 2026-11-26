@@ -7,6 +7,7 @@ import path from 'node:path';
 import {
   ADMINISTRA_BARRAGENS_V2_PATH,
   ADMINISTRA_HEALTH_PATH,
+  ADMINISTRA_S2S_V2_SCOPES,
   buildS2sV2CanonicalString,
   buildS2sV2HealthCanonicalString,
   canonicalizeS2sQuery,
@@ -31,7 +32,10 @@ function generateEphemeralEd25519Pair(): {
   return { privateKeyPem, publicKey };
 }
 
-test('buildS2sV2HealthCanonicalString gera exatamente 10 linhas separadas por LF sem LF final', () => {
+const UUID_V4_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+test('buildS2sV2HealthCanonicalString gera exatamente 10 linhas separadas por LF sem LF final (comparação literal)', () => {
   const keyId = 'classifica-test-kid-01';
   const timestamp = '1764000000';
   const jti = '550e8400-e29b-41d4-a716-446655440000';
@@ -42,24 +46,24 @@ test('buildS2sV2HealthCanonicalString gera exatamente 10 linhas separadas por LF
     jti,
   });
 
+  const expectedLiteral =
+    'S2S-V2\n' +
+    'GET\n' +
+    '/api/v2/health\n' +
+    '\n' +
+    '\n' +
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n' +
+    'classifica-test-kid-01\n' +
+    '1764000000\n' +
+    '550e8400-e29b-41d4-a716-446655440000\n' +
+    '|';
+
   assert.equal(canonical.endsWith('\n'), false);
-  const lines = canonical.split('\n');
-  assert.equal(lines.length, 10);
-  assert.deepEqual(lines, [
-    'S2S-V2',
-    'GET',
-    '/api/v2/health',
-    '',
-    '',
-    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-    keyId,
-    timestamp,
-    jti,
-    '|',
-  ]);
+  assert.equal(canonical.split('\n').length, 10);
+  assert.equal(canonical, expectedLiteral);
 });
 
-test('createAdministraS2sHealthHeaders gera JTI UUID, timestamp Unix em segundos e assinatura Ed25519 verificável', () => {
+test('createAdministraS2sHealthHeaders gera JTI UUID v4, timestamp em segundos, sem Authorization/x-consumer-* e assinatura Ed25519 em base64url', () => {
   const { privateKeyPem, publicKey } = generateEphemeralEd25519Pair();
   const keyId = 'classifica-test-kid-02';
 
@@ -70,10 +74,7 @@ test('createAdministraS2sHealthHeaders gera JTI UUID, timestamp Unix em segundos
   });
   const afterSec = Math.floor(Date.now() / 1000);
 
-  assert.match(
-    created.jti,
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-  );
+  assert.match(created.jti, UUID_V4_RE);
   assert.match(created.timestamp, /^\d+$/);
   const tsNum = Number(created.timestamp);
   assert.ok(tsNum >= beforeSec && tsNum <= afterSec + 1);
@@ -82,37 +83,170 @@ test('createAdministraS2sHealthHeaders gera JTI UUID, timestamp Unix em segundos
   assert.equal(created.headers['x-s2s-timestamp'], created.timestamp);
   assert.equal(created.headers['x-s2s-jti'], created.jti);
   assert.equal(created.headers['x-s2s-body-sha256'], EMPTY_BODY_SHA256);
+  assert.doesNotMatch(created.headers['x-s2s-signature'], /[+/=]/);
+
+  const headerKeys = Object.keys(created.headers).map((k) => k.toLowerCase());
+  assert.equal(headerKeys.includes('authorization'), false);
+  assert.equal(
+    headerKeys.some((k) => k.startsWith('x-consumer-')),
+    false
+  );
+
+  const expectedCanonicalLiteral =
+    'S2S-V2\n' +
+    'GET\n' +
+    '/api/v2/health\n' +
+    '\n' +
+    '\n' +
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n' +
+    'classifica-test-kid-02\n' +
+    `${created.timestamp}\n` +
+    `${created.jti}\n` +
+    '|';
 
   const isValid = crypto.verify(
     null,
-    Buffer.from(created.canonicalString, 'utf8'),
+    Buffer.from(expectedCanonicalLiteral, 'utf8'),
     publicKey,
-    Buffer.from(created.headers['x-s2s-signature'], 'base64')
+    Buffer.from(created.headers['x-s2s-signature'], 'base64url')
   );
   assert.equal(isValid, true);
 
   // Também aceita PEM PKCS8 serializado com \\n em variáveis de ambiente
+  const fixedLiteral =
+    'S2S-V2\n' +
+    'GET\n' +
+    '/api/v2/health\n' +
+    '\n' +
+    '\n' +
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n' +
+    'classifica-test-kid-02\n' +
+    '1764000000\n' +
+    '550e8400-e29b-41d4-a716-446655440000\n' +
+    '|';
   const escapedPem = privateKeyPem.replace(/\n/g, '\\n');
-  const escapedSig = signS2sV2Canonical(created.canonicalString, escapedPem);
-  assert.equal(escapedSig, created.headers['x-s2s-signature']);
+  const escapedSig = signS2sV2Canonical(fixedLiteral, escapedPem);
+  assert.doesNotMatch(escapedSig, /[+/=]/);
+  assert.equal(
+    crypto.verify(
+      null,
+      Buffer.from(fixedLiteral, 'utf8'),
+      publicKey,
+      Buffer.from(escapedSig, 'base64url')
+    ),
+    true
+  );
 });
 
-test('rejeita chaves não-Ed25519, quebras de linha em campos e URLs inválidas', () => {
+test('cliente restringe endpoints apenas a GET /api/v2/health (health:read) e GET /api/v2/barragens (barragens:read) e rejeita /empreendedores', async () => {
+  assert.deepEqual(ADMINISTRA_S2S_V2_SCOPES, {
+    '/api/v2/health': 'health:read',
+    '/api/v2/barragens': 'barragens:read',
+  });
+
+  const { privateKeyPem } = generateEphemeralEd25519Pair();
+
+  for (const forbiddenPath of [
+    '/api/v2/empreendedores',
+    '/empreendedores',
+    '/api/v1/barragens',
+    '/api/v2/rts',
+  ]) {
+    assert.throws(
+      () => resolveAdministraS2sUrl('https://administra.exemplo.gov.br', forbiddenPath),
+      /Endpoint S2S-V2 não permitido/
+    );
+    assert.throws(
+      () =>
+        buildS2sV2CanonicalString({
+          method: 'GET',
+          path: forbiddenPath,
+          keyId: 'kid-1',
+          timestamp: '1764000000',
+          jti: '550e8400-e29b-41d4-a716-446655440000',
+        }),
+      /Endpoint S2S-V2 não permitido/
+    );
+    await assert.rejects(
+      () =>
+        requestAdministraS2sGet({
+          path: forbiddenPath,
+          env: {
+            ADMINISTRA_API_URL: 'https://administra.exemplo.gov.br',
+            CLASSIFICA_S2S_KID: 'kid-1',
+            CLASSIFICA_S2S_PRIVATE_KEY: privateKeyPem,
+          },
+          fetchImpl: async () => {
+            throw new Error('não deveria chamar fetch para endpoint proibido');
+          },
+        }),
+      /Endpoint S2S-V2 não permitido/
+    );
+  }
+
+  assert.throws(
+    () =>
+      buildS2sV2CanonicalString({
+        method: 'POST',
+        path: ADMINISTRA_BARRAGENS_V2_PATH,
+        keyId: 'kid-1',
+        timestamp: '1764000000',
+        jti: '550e8400-e29b-41d4-a716-446655440000',
+      }),
+    /Método S2S-V2 não permitido/
+  );
+});
+
+test('canonicalizeS2sQuery aplica RFC 3986 estrita (%20 e !\'()* codificados) e ordenação lexicográfica', () => {
+  const canonical = canonicalizeS2sQuery("z=a b!c'd(e)f*g&a=São Paulo&a=Alpha");
+  assert.equal(
+    canonical,
+    'a=Alpha&a=S%C3%A3o%20Paulo&z=a%20b%21c%27d%28e%29f%2Ag'
+  );
+  assert.equal(canonical.includes('+'), false);
+
+  const canonicalMsg = buildS2sV2CanonicalString({
+    method: 'GET',
+    path: ADMINISTRA_BARRAGENS_V2_PATH,
+    query: "limit=10&cursor=cur 1!'()*",
+    keyId: 'kid-rfc',
+    timestamp: '1764000000',
+    jti: '550e8400-e29b-41d4-a716-446655440000',
+  });
+  const expectedLiteral =
+    'S2S-V2\n' +
+    'GET\n' +
+    '/api/v2/barragens\n' +
+    'cursor=cur%201%21%27%28%29%2A&limit=10\n' +
+    '\n' +
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n' +
+    'kid-rfc\n' +
+    '1764000000\n' +
+    '550e8400-e29b-41d4-a716-446655440000\n' +
+    '|';
+  assert.equal(canonicalMsg, expectedLiteral);
+});
+
+test('rejeita chaves não-Ed25519, JTI inválido, quebras de linha e ADMINISTRA_API_URL insegura', () => {
   const { privateKey: rsaKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,
   });
   const rsaPem = rsaKey.export({ type: 'pkcs8', format: 'pem' }) as string;
 
+  const validHealthLiteral =
+    'S2S-V2\n' +
+    'GET\n' +
+    '/api/v2/health\n' +
+    '\n' +
+    '\n' +
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n' +
+    'kid-rsa\n' +
+    '1764000000\n' +
+    '550e8400-e29b-41d4-a716-446655440000\n' +
+    '|';
+
   assert.throws(
-    () =>
-      signS2sV2Canonical(
-        buildS2sV2HealthCanonicalString({
-          keyId: 'kid-rsa',
-          timestamp: '1764000000',
-          jti: crypto.randomUUID(),
-        }),
-        rsaPem
-      ),
+    () => signS2sV2Canonical(validHealthLiteral, rsaPem),
     /Ed25519/
   );
 
@@ -127,6 +261,16 @@ test('rejeita chaves não-Ed25519, quebras de linha em campos e URLs inválidas'
   );
 
   assert.throws(
+    () =>
+      buildS2sV2HealthCanonicalString({
+        keyId: 'kid-1',
+        timestamp: '1764000000',
+        jti: 'nao-e-uuid-v4',
+      }),
+    /UUID v4/
+  );
+
+  assert.throws(
     () => resolveAdministraHealthUrl('https://administra.exemplo.gov.br/api/v2/health'),
     /sem caminho/
   );
@@ -134,48 +278,107 @@ test('rejeita chaves não-Ed25519, quebras de linha em campos e URLs inválidas'
     () => resolveAdministraHealthUrl('http://administra.exemplo.gov.br'),
     /HTTPS/
   );
+  assert.throws(
+    () => resolveAdministraHealthUrl('https://user:pass@administra.exemplo.gov.br'),
+    /credenciais/
+  );
+  assert.throws(
+    () => resolveAdministraHealthUrl('https://user@administra.exemplo.gov.br'),
+    /credenciais/
+  );
+  assert.throws(
+    () => resolveAdministraHealthUrl('https://administra.exemplo.gov.br?foo=bar'),
+    /query string/
+  );
+  assert.throws(
+    () => resolveAdministraHealthUrl('https://administra.exemplo.gov.br/?'),
+    /query string/
+  );
+  assert.throws(
+    () => resolveAdministraHealthUrl('https://administra.exemplo.gov.br#frag'),
+    /fragmento/
+  );
+  assert.throws(
+    () => resolveAdministraHealthUrl('https://administra.exemplo.gov.br/#'),
+    /fragmento/
+  );
+  assert.throws(
+    () =>
+      resolveAdministraHealthUrl('http://127.0.0.1:3001', {
+        env: { NODE_ENV: 'production' },
+      }),
+    /HTTPS em produção/
+  );
+  assert.throws(
+    () =>
+      resolveAdministraHealthUrl('http://localhost:3001', {
+        env: { VERCEL_ENV: 'production' },
+      }),
+    /HTTPS em produção/
+  );
   assert.equal(
-    resolveAdministraHealthUrl('https://administra.exemplo.gov.br/'),
+    resolveAdministraHealthUrl('https://administra.exemplo.gov.br/', {
+      env: { NODE_ENV: 'production' },
+    }),
     'https://administra.exemplo.gov.br/api/v2/health'
   );
 });
 
-test('testAdministraHealth executa GET sem Content-Type com cabeçalhos S2S-V2 válidos contra servidor HTTP local simulado', async () => {
+test('testAdministraHealth aceita ADMINISTRA_API_URL, gera JTI UUID v4 novo por chamada e valida assinatura Ed25519 base64url com string canônica literal', async () => {
   const { privateKeyPem, publicKey } = generateEphemeralEd25519Pair();
   const keyId = 'classifica-test-kid-http';
 
-  let observedMethod: string | undefined;
-  let observedUrl: string | undefined;
-  let observedContentType: string | string[] | undefined;
-  let observedHeaders: http.IncomingHttpHeaders = {};
-  let verifiedSignature = false;
+  const observedJtis: string[] = [];
+  const observedChecks: Array<{
+    method: string | undefined;
+    url: string | undefined;
+    contentType: string | string[] | undefined;
+    authorization: string | string[] | undefined;
+    hasConsumerHeader: boolean;
+    verified: boolean;
+  }> = [];
 
   const server = http.createServer((req, res) => {
-    observedMethod = req.method;
-    observedUrl = req.url;
-    observedContentType = req.headers['content-type'];
-    observedHeaders = req.headers;
-
-    const canonicalFromRequest = [
-      'S2S-V2',
-      req.method || '',
-      req.url || '',
-      '',
-      '',
-      String(req.headers['x-s2s-body-sha256'] || ''),
-      String(req.headers['x-s2s-key-id'] || ''),
-      String(req.headers['x-s2s-timestamp'] || ''),
-      String(req.headers['x-s2s-jti'] || ''),
-      '|',
-    ].join('\n');
-
+    const timestamp = String(req.headers['x-s2s-timestamp'] || '');
+    const jti = String(req.headers['x-s2s-jti'] || '');
+    const kid = String(req.headers['x-s2s-key-id'] || '');
+    const bodySha = String(req.headers['x-s2s-body-sha256'] || '');
     const sig = String(req.headers['x-s2s-signature'] || '');
-    verifiedSignature = crypto.verify(
-      null,
-      Buffer.from(canonicalFromRequest, 'utf8'),
-      publicKey,
-      Buffer.from(sig, 'base64')
-    );
+
+    observedJtis.push(jti);
+
+    const canonicalLiteral =
+      'S2S-V2\n' +
+      'GET\n' +
+      '/api/v2/health\n' +
+      '\n' +
+      '\n' +
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n' +
+      `${kid}\n` +
+      `${timestamp}\n` +
+      `${jti}\n` +
+      '|';
+
+    const verified =
+      bodySha === 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' &&
+      !/[+/=]/.test(sig) &&
+      crypto.verify(
+        null,
+        Buffer.from(canonicalLiteral, 'utf8'),
+        publicKey,
+        Buffer.from(sig, 'base64url')
+      );
+
+    observedChecks.push({
+      method: req.method,
+      url: req.url,
+      contentType: req.headers['content-type'],
+      authorization: req.headers.authorization,
+      hasConsumerHeader: Object.keys(req.headers).some((h) =>
+        h.toLowerCase().startsWith('x-consumer-')
+      ),
+      verified,
+    });
 
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
@@ -191,30 +394,40 @@ test('testAdministraHealth executa GET sem Content-Type com cabeçalhos S2S-V2 v
     assert.ok(addr && typeof addr !== 'string');
     const baseUrl = `http://127.0.0.1:${addr.port}`;
 
-    const result = await testAdministraHealth({
+    const result1 = await testAdministraHealth({
       env: {
-        ADMINISTRA_API_BASE_URL: baseUrl,
+        ADMINISTRA_API_URL: baseUrl,
+        CLASSIFICA_S2S_KID: keyId,
+        CLASSIFICA_S2S_PRIVATE_KEY: privateKeyPem,
+      },
+    });
+    const result2 = await testAdministraHealth({
+      env: {
+        ADMINISTRA_API_URL: baseUrl,
         CLASSIFICA_S2S_KID: keyId,
         CLASSIFICA_S2S_PRIVATE_KEY: privateKeyPem,
       },
     });
 
-    assert.equal(result.ok, true);
-    assert.equal(result.status, 200);
-    assert.equal(result.url, `${baseUrl}${ADMINISTRA_HEALTH_PATH}`);
-    assert.deepEqual(result.body, { ok: true, service: 'administra-mock' });
+    assert.equal(result1.ok, true);
+    assert.equal(result1.status, 200);
+    assert.equal(result1.url, `${baseUrl}${ADMINISTRA_HEALTH_PATH}`);
+    assert.deepEqual(result1.body, { ok: true, service: 'administra-mock' });
+    assert.equal(result2.ok, true);
 
-    assert.equal(observedMethod, 'GET');
-    assert.equal(observedUrl, '/api/v2/health');
-    assert.equal(observedContentType, undefined);
-    assert.equal(observedHeaders['x-s2s-key-id'], keyId);
-    assert.equal(observedHeaders['x-s2s-body-sha256'], EMPTY_BODY_SHA256);
-    assert.match(String(observedHeaders['x-s2s-timestamp']), /^\d+$/);
-    assert.match(
-      String(observedHeaders['x-s2s-jti']),
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-    );
-    assert.equal(verifiedSignature, true);
+    assert.equal(observedJtis.length, 2);
+    assert.match(observedJtis[0], UUID_V4_RE);
+    assert.match(observedJtis[1], UUID_V4_RE);
+    assert.notEqual(observedJtis[0], observedJtis[1]);
+
+    for (const check of observedChecks) {
+      assert.equal(check.method, 'GET');
+      assert.equal(check.url, '/api/v2/health');
+      assert.equal(check.contentType, undefined);
+      assert.equal(check.authorization, undefined);
+      assert.equal(check.hasConsumerHeader, false);
+      assert.equal(check.verified, true);
+    }
   } finally {
     server.closeAllConnections?.();
     await new Promise<void>((resolve, reject) => {
@@ -234,7 +447,10 @@ test('variáveis S2S e cliente server-side não são referenciados no frontend n
   const forbiddenNames = [
     'CLASSIFICA_S2S_PRIVATE_KEY',
     'CLASSIFICA_S2S_KID',
+    'ADMINISTRA_API_URL',
     'ADMINISTRA_API_BASE_URL',
+    'VITE_CLASSIFICA_S2S_',
+    'VITE_ADMINISTRA_API_',
     'administraS2sHealth',
   ];
 
@@ -264,7 +480,7 @@ test('variáveis S2S e cliente server-side não são referenciados no frontend n
   }
 });
 
-test('requestAdministraS2sGet assina query canonicalizada de GET /api/v2/barragens de forma idêntica ao servidor', async () => {
+test('requestAdministraS2sGet assina GET /api/v2/barragens com query RFC 3986, base64url, JTI UUID v4 único e verificação por string canônica literal', async () => {
   const { privateKeyPem, publicKey } = generateEphemeralEd25519Pair();
   const keyId = 'classifica-test-kid-barragens';
 
@@ -280,38 +496,52 @@ test('requestAdministraS2sGet assina query canonicalizada de GET /api/v2/barrage
     resolveAdministraS2sUrl(
       'https://administra.exemplo.gov.br',
       ADMINISTRA_BARRAGENS_V2_PATH,
-      'limit=20&cursor=cur_1'
+      'limit=20&cursor=cur 1!'
     ),
-    'https://administra.exemplo.gov.br/api/v2/barragens?cursor=cur_1&limit=20'
+    'https://administra.exemplo.gov.br/api/v2/barragens?cursor=cur%201%21&limit=20'
   );
 
   let observedPathname = '';
   let observedQuery = '';
+  let observedAuthHeader: string | undefined;
+  let observedConsumerHeaders: string[] = [];
+  const observedJtis: string[] = [];
   let verifiedSignature = false;
 
   const server = http.createServer((req, res) => {
     const parsedUrl = new URL(req.url || '/', 'http://127.0.0.1');
     observedPathname = parsedUrl.pathname;
     observedQuery = parsedUrl.search.replace(/^\?/, '');
+    observedAuthHeader = req.headers.authorization;
+    observedConsumerHeaders = Object.keys(req.headers).filter((k) =>
+      k.toLowerCase().startsWith('x-consumer-')
+    );
 
-    const canonicalFromWire = buildS2sV2CanonicalString({
-      method: req.method || '',
-      path: observedPathname,
-      query: canonicalizeS2sQuery(observedQuery),
-      contentType: String(req.headers['content-type'] || ''),
-      bodySha256: String(req.headers['x-s2s-body-sha256'] || ''),
-      keyId: String(req.headers['x-s2s-key-id'] || ''),
-      timestamp: String(req.headers['x-s2s-timestamp'] || ''),
-      jti: String(req.headers['x-s2s-jti'] || ''),
-    });
+    const timestamp = String(req.headers['x-s2s-timestamp'] || '');
+    const jti = String(req.headers['x-s2s-jti'] || '');
+    observedJtis.push(jti);
+
+    const expectedLiteral =
+      'S2S-V2\n' +
+      'GET\n' +
+      '/api/v2/barragens\n' +
+      'cursor=cur_1&limit=20\n' +
+      '\n' +
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n' +
+      `${String(req.headers['x-s2s-key-id'] || '')}\n` +
+      `${timestamp}\n` +
+      `${jti}\n` +
+      '|';
 
     const sig = String(req.headers['x-s2s-signature'] || '');
-    verifiedSignature = crypto.verify(
-      null,
-      Buffer.from(canonicalFromWire, 'utf8'),
-      publicKey,
-      Buffer.from(sig, 'base64')
-    );
+    verifiedSignature =
+      !/[+/=]/.test(sig) &&
+      crypto.verify(
+        null,
+        Buffer.from(expectedLiteral, 'utf8'),
+        publicKey,
+        Buffer.from(sig, 'base64url')
+      );
 
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
@@ -334,22 +564,36 @@ test('requestAdministraS2sGet assina query canonicalizada de GET /api/v2/barrage
     assert.ok(addr && typeof addr !== 'string');
     const baseUrl = `http://127.0.0.1:${addr.port}`;
 
-    const result = await requestAdministraS2sGet({
+    const envConfig = {
+      ADMINISTRA_API_URL: baseUrl,
+      CLASSIFICA_S2S_KID: keyId,
+      CLASSIFICA_S2S_PRIVATE_KEY: privateKeyPem,
+    };
+
+    const result1 = await requestAdministraS2sGet({
       path: ADMINISTRA_BARRAGENS_V2_PATH,
       query: 'limit=20&cursor=cur_1',
-      env: {
-        ADMINISTRA_API_BASE_URL: baseUrl,
-        CLASSIFICA_S2S_KID: keyId,
-        CLASSIFICA_S2S_PRIVATE_KEY: privateKeyPem,
-      },
+      env: envConfig,
+    });
+    const result2 = await requestAdministraS2sGet({
+      path: ADMINISTRA_BARRAGENS_V2_PATH,
+      query: 'limit=20&cursor=cur_1',
+      env: envConfig,
     });
 
-    assert.equal(result.ok, true);
-    assert.equal(result.status, 200);
+    assert.equal(result1.ok, true);
+    assert.equal(result1.status, 200);
+    assert.equal(result2.ok, true);
     assert.equal(observedPathname, '/api/v2/barragens');
     assert.equal(observedQuery, 'cursor=cur_1&limit=20');
+    assert.equal(observedAuthHeader, undefined);
+    assert.deepEqual(observedConsumerHeaders, []);
     assert.equal(verifiedSignature, true);
-    assert.equal(result.headers.get('x-masking-policy'), 'masked');
+    assert.equal(result1.headers.get('x-masking-policy'), 'masked');
+    assert.equal(observedJtis.length, 2);
+    assert.match(observedJtis[0], UUID_V4_RE);
+    assert.match(observedJtis[1], UUID_V4_RE);
+    assert.notEqual(observedJtis[0], observedJtis[1]);
   } finally {
     server.closeAllConnections?.();
     await new Promise<void>((resolve, reject) => {

@@ -175,6 +175,215 @@ function resolveSafeCoordinateGms(
   return normalized;
 }
 
+const MASKED_TEXT_EXACT = new Set([
+  '*',
+  '**',
+  '***',
+  '—',
+  '--',
+  '---',
+  'n/a',
+  'na',
+  'mascarado',
+  'mascarada',
+  '[masked]',
+  'masked',
+  '[redacted]',
+  'redacted',
+  'oculto',
+  'sigiloso',
+  'confidencial',
+]);
+
+export function isMaskedAdministraValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'number') return !Number.isFinite(value);
+  if (typeof value === 'boolean') return false;
+  if (typeof value !== 'string') return true;
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  if (MASKED_TEXT_EXACT.has(trimmed.toLowerCase())) return true;
+  if (/\*{2,}|•{2,}/.test(trimmed)) return true;
+  return false;
+}
+
+export function resolveNonMaskedAdministraText(
+  incoming: unknown,
+  existing?: string | null
+): string {
+  if (!isMaskedAdministraValue(incoming)) {
+    return String(incoming).trim();
+  }
+  return typeof existing === 'string' ? existing : '';
+}
+
+function pickNonMaskedV2Field(
+  row: Record<string, any> | null | undefined,
+  patterns: RegExp[]
+): string | null {
+  const val = pickCanonicalField(row, patterns);
+  if (val === null || isMaskedAdministraValue(val)) {
+    return null;
+  }
+  return val;
+}
+
+export function mergeBarragemMasterPreservingLocal(
+  local: BarragemMaster,
+  incoming: Partial<BarragemMaster> | null | undefined
+): BarragemMaster {
+  if (!incoming || typeof incoming !== 'object') {
+    return { ...local };
+  }
+
+  const pickStringField = (
+    localVal: string | null | undefined,
+    incomingVal: unknown
+  ): string | null | undefined => {
+    if (!isMaskedAdministraValue(localVal)) {
+      return String(localVal).trim();
+    }
+    if (!isMaskedAdministraValue(incomingVal)) {
+      return String(incomingVal).trim();
+    }
+    return localVal;
+  };
+
+  const pickRequiredStringField = (
+    localVal: string | null | undefined,
+    incomingVal: unknown,
+    fallback: string,
+    placeholder?: string
+  ): string => {
+    const localTrim = typeof localVal === 'string' ? localVal.trim() : '';
+    if (localTrim && !isMaskedAdministraValue(localTrim) && localTrim !== placeholder) {
+      return localTrim;
+    }
+    if (!isMaskedAdministraValue(incomingVal)) {
+      const incTrim = String(incomingVal).trim();
+      if (incTrim && incTrim !== placeholder) {
+        return incTrim;
+      }
+    }
+    return localTrim || fallback;
+  };
+
+  const pickCoordNum = (
+    localVal: number | null | undefined,
+    incomingVal: unknown,
+    maxAbs: number
+  ): number | null => {
+    if (typeof localVal === 'number' && Number.isFinite(localVal) && Math.abs(localVal) <= maxAbs) {
+      return localVal;
+    }
+    if (typeof incomingVal === 'number' && Number.isFinite(incomingVal) && Math.abs(incomingVal) <= maxAbs) {
+      return incomingVal;
+    }
+    return localVal ?? null;
+  };
+
+  const mergedLatGms = (() => {
+    const localGms = !isMaskedAdministraValue(local.lat_gms)
+      ? normalizeCoordinateToGMS(local.lat_gms)
+      : '';
+    if (localGms) return localGms;
+    if (!isMaskedAdministraValue(incoming.lat_gms)) {
+      const incGms = normalizeCoordinateToGMS(incoming.lat_gms);
+      if (incGms) return incGms;
+    }
+    return local.lat_gms ?? null;
+  })();
+
+  const mergedLongGms = (() => {
+    const localGms = !isMaskedAdministraValue(local.long_gms)
+      ? normalizeCoordinateToGMS(local.long_gms)
+      : '';
+    if (localGms) return localGms;
+    if (!isMaskedAdministraValue(incoming.long_gms)) {
+      const incGms = normalizeCoordinateToGMS(incoming.long_gms);
+      if (incGms) return incGms;
+    }
+    return local.long_gms ?? null;
+  })();
+
+  return {
+    ...local,
+    id: pickRequiredStringField(local.id, incoming.id, ''),
+    empreendedor_id: pickStringField(local.empreendedor_id, incoming.empreendedor_id),
+    empreendedor_nome: pickStringField(local.empreendedor_nome, incoming.empreendedor_nome),
+    empreendedor_cpf_cnpj: pickStringField(
+      local.empreendedor_cpf_cnpj,
+      incoming.empreendedor_cpf_cnpj
+    ),
+    snisb: pickStringField(local.snisb, incoming.snisb),
+    nome: pickRequiredStringField(
+      local.nome,
+      incoming.nome,
+      'Barragem sem nome',
+      'Barragem sem nome'
+    ),
+    municipio: pickRequiredStringField(local.municipio, incoming.municipio, ''),
+    upg: pickStringField(local.upg, incoming.upg),
+    sub_bacia: pickStringField(local.sub_bacia, incoming.sub_bacia),
+    curso_agua: pickStringField(local.curso_agua, incoming.curso_agua),
+    zona: pickStringField(local.zona, incoming.zona),
+    localizacao: pickStringField(local.localizacao, incoming.localizacao),
+    lat_decimal: pickCoordNum(local.lat_decimal, incoming.lat_decimal, 90),
+    long_decimal: pickCoordNum(local.long_decimal, incoming.long_decimal, 180),
+    lat_gms: mergedLatGms,
+    long_gms: mergedLongGms,
+    altura_maxima: pickStringField(local.altura_maxima, incoming.altura_maxima),
+    comprimento_coroamento: pickStringField(
+      local.comprimento_coroamento,
+      incoming.comprimento_coroamento
+    ),
+    largura_coroamento: pickStringField(
+      local.largura_coroamento,
+      incoming.largura_coroamento
+    ),
+    volume_nmo: pickStringField(local.volume_nmo, incoming.volume_nmo),
+    volume_nmm: pickStringField(local.volume_nmm, incoming.volume_nmm),
+    tipo_estrutural: pickStringField(local.tipo_estrutural, incoming.tipo_estrutural),
+    tipo_fundacao: pickStringField(local.tipo_fundacao, incoming.tipo_fundacao),
+    finalidade: pickStringField(local.finalidade, incoming.finalidade),
+    situacao: pickStringField(local.situacao, incoming.situacao),
+    dpa_atual: pickStringField(local.dpa_atual, incoming.dpa_atual),
+    cri_atual: pickStringField(local.cri_atual, incoming.cri_atual),
+    enquadramento_pnsb:
+      typeof local.enquadramento_pnsb === 'boolean'
+        ? local.enquadramento_pnsb
+        : typeof incoming.enquadramento_pnsb === 'boolean'
+        ? incoming.enquadramento_pnsb
+        : null,
+    sistema_origem: local.sistema_origem || incoming.sistema_origem || 'ADMINISTRA_BARRAGENS',
+    ...(local.created_by_user_id !== undefined ||
+    !isMaskedAdministraValue(incoming.created_by_user_id)
+      ? {
+          created_by_user_id: pickStringField(
+            local.created_by_user_id,
+            incoming.created_by_user_id
+          ),
+        }
+      : {}),
+    ...(local.created_by_name !== undefined ||
+    !isMaskedAdministraValue(incoming.created_by_name)
+      ? {
+          created_by_name: pickStringField(
+            local.created_by_name,
+            incoming.created_by_name
+          ),
+        }
+      : {}),
+  };
+}
+
+export function mergeBarragemV2IntoMasterPreservingLocal(
+  local: BarragemMaster,
+  dto: BarragemV2Dto
+): BarragemMaster {
+  return mergeBarragemMasterPreservingLocal(local, mapBarragemV2ToMaster(dto));
+}
+
 export function mapCanonicalBarragem(
   record: Record<string, any>,
   empreendedor?: Record<string, any> | null,
@@ -185,23 +394,23 @@ export function mapCanonicalBarragem(
     const longDecimal = parseStrictCoordinateNumber(record?.longitude, 180);
 
     return {
-      id: pickCanonicalField(record, [/^id$/i]) || '',
-      empreendedor_id: pickCanonicalField(record, [/^empreendedor_id$/i]),
+      id: pickNonMaskedV2Field(record, [/^id$/i]) || '',
+      empreendedor_id: pickNonMaskedV2Field(record, [/^empreendedor_id$/i]),
       empreendedor_nome: null,
       empreendedor_cpf_cnpj: null,
-      snisb: pickCanonicalField(record, [/^snisb$/i]),
-      nome: pickCanonicalField(record, [/^nome$/i]) || 'Barragem sem nome',
-      municipio: pickCanonicalField(record, [/^municipio$/i]) || '',
+      snisb: pickNonMaskedV2Field(record, [/^snisb$/i]),
+      nome: pickNonMaskedV2Field(record, [/^nome$/i]) || 'Barragem sem nome',
+      municipio: pickNonMaskedV2Field(record, [/^municipio$/i]) || '',
       upg: null,
       sub_bacia: null,
-      curso_agua: pickCanonicalField(record, [/^curso_agua$/i]),
+      curso_agua: pickNonMaskedV2Field(record, [/^curso_agua$/i]),
       zona: null,
       localizacao: null,
       lat_decimal: latDecimal,
       long_decimal: longDecimal,
       lat_gms: resolveSafeCoordinateGms(record?.latitude, latDecimal, 90),
       long_gms: resolveSafeCoordinateGms(record?.longitude, longDecimal, 180),
-      altura_maxima: pickCanonicalField(record, [/^altura$/i, /^altura_maxima$/i]),
+      altura_maxima: pickNonMaskedV2Field(record, [/^altura$/i, /^altura_maxima$/i]),
       comprimento_coroamento: null,
       largura_coroamento: null,
       volume_nmo: null,
@@ -209,9 +418,9 @@ export function mapCanonicalBarragem(
       tipo_estrutural: null,
       tipo_fundacao: null,
       finalidade: null,
-      situacao: pickCanonicalField(record, [/^situacao$/i]),
-      dpa_atual: pickCanonicalField(record, [/^dano_potencial$/i, /^dpa_atual$/i, /^dpa$/i]),
-      cri_atual: pickCanonicalField(record, [/^categoria_risco$/i, /^cri_atual$/i, /^cri$/i]),
+      situacao: pickNonMaskedV2Field(record, [/^situacao$/i]),
+      dpa_atual: pickNonMaskedV2Field(record, [/^dano_potencial$/i, /^dpa_atual$/i, /^dpa$/i]),
+      cri_atual: pickNonMaskedV2Field(record, [/^categoria_risco$/i, /^cri_atual$/i, /^cri$/i]),
       enquadramento_pnsb: null,
       sistema_origem: 'ADMINISTRA_BARRAGENS',
       created_by_user_id: null,
@@ -2014,8 +2223,19 @@ export interface FetchBarragensV2Deps {
   fetchImpl?: typeof fetch;
 }
 
+export interface FetchAllBarragensV2Result {
+  ok: boolean;
+  data: BarragemV2Dto[];
+  maskingPolicy: 'masked' | null;
+  pagesFetched: number;
+  total: number | null;
+  error?: AdministraReadError;
+}
+
 const BARRAGENS_V2_DEFAULT_LIMIT = 25;
 const BARRAGENS_V2_MAX_LIMIT = 100;
+export const BARRAGENS_V2_DEFAULT_MAX_PAGES = 50;
+export const BARRAGENS_V2_MAX_PAGES_CAP = 100;
 
 function isPlainV2Object(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -2358,6 +2578,42 @@ export async function fetchBarragensV2Page(
       };
     }
     const hasMore = typeof pag.hasMore === 'boolean' ? pag.hasMore : nextCursor !== null;
+    if (hasMore && !nextCursor) {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(
+          'Paginação v2 inconsistente: hasMore=true sem nextCursor.',
+          {
+            table: 'barragens',
+            status: response.status,
+            code: 'INVALID_PAGINATION',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
+    if (cursor && nextCursor && nextCursor === cursor) {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagination: emptyV2Pagination(safeLimit),
+        error: buildClientError(
+          'Cursor repetido detectado na resposta v2 de Barragens.',
+          {
+            table: 'barragens',
+            status: response.status,
+            code: 'REPEATED_CURSOR',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
     const total =
       typeof pag.total === 'number' && Number.isInteger(pag.total) && pag.total >= 0
         ? pag.total
@@ -2412,5 +2668,143 @@ export async function fetchBarragensV2Page(
         }
       ),
     };
+  }
+}
+
+export async function fetchAllBarragensV2Pages(
+  params: { limit?: number; maxPages?: number } = {},
+  deps: FetchBarragensV2Deps = {}
+): Promise<FetchAllBarragensV2Result> {
+  const safeLimit = normalizeBarragensV2Limit(params.limit);
+  const rawMaxPages = params.maxPages ?? BARRAGENS_V2_DEFAULT_MAX_PAGES;
+  if (
+    typeof rawMaxPages !== 'number' ||
+    !Number.isInteger(rawMaxPages) ||
+    rawMaxPages < 1
+  ) {
+    return {
+      ok: false,
+      data: [],
+      maskingPolicy: null,
+      pagesFetched: 0,
+      total: null,
+      error: buildClientError(
+        'Limite máximo de páginas inválido para paginação v2 de Barragens.',
+        {
+          table: 'barragens',
+          status: 400,
+          code: 'INVALID_MAX_PAGES',
+          isRlsOrPermission: false,
+        }
+      ),
+    };
+  }
+  const maxPages = Math.min(rawMaxPages, BARRAGENS_V2_MAX_PAGES_CAP);
+
+  let currentCursor: string | null = null;
+  const seenCursors = new Set<string>();
+  const accumulated: BarragemV2Dto[] = [];
+  let pagesFetched = 0;
+  let lastTotal: number | null = null;
+
+  while (true) {
+    if (pagesFetched >= maxPages) {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagesFetched,
+        total: null,
+        error: buildClientError(
+          `Limite máximo de ${maxPages} páginas atingido na paginação v2 de Barragens.`,
+          {
+            table: 'barragens',
+            code: 'PAGINATION_LIMIT_EXCEEDED',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
+    const pageRes = await fetchBarragensV2Page(
+      { limit: safeLimit, cursor: currentCursor },
+      deps
+    );
+
+    if (!pageRes.ok || pageRes.maskingPolicy !== 'masked') {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagesFetched,
+        total: null,
+        error:
+          pageRes.error ||
+          buildClientError(
+            'Falha ao concluir a paginação v2 de Barragens.',
+            {
+              table: 'barragens',
+              code: 'PAGINATION_ERROR',
+              isRlsOrPermission: false,
+            }
+          ),
+      };
+    }
+
+    pagesFetched += 1;
+    accumulated.push(...pageRes.data);
+    if (pageRes.pagination.total !== null) {
+      lastTotal = pageRes.pagination.total;
+    }
+
+    if (!pageRes.pagination.hasMore) {
+      return {
+        ok: true,
+        data: accumulated,
+        maskingPolicy: 'masked',
+        pagesFetched,
+        total: lastTotal,
+      };
+    }
+
+    const nextCursor = pageRes.pagination.nextCursor;
+    if (!nextCursor) {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagesFetched,
+        total: null,
+        error: buildClientError(
+          'Paginação v2 inconsistente: hasMore=true sem nextCursor.',
+          {
+            table: 'barragens',
+            code: 'INVALID_PAGINATION',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
+    if (nextCursor === currentCursor || seenCursors.has(nextCursor)) {
+      return {
+        ok: false,
+        data: [],
+        maskingPolicy: null,
+        pagesFetched,
+        total: null,
+        error: buildClientError(
+          'Cursor repetido detectado durante a paginação v2 de Barragens.',
+          {
+            table: 'barragens',
+            code: 'REPEATED_CURSOR',
+            isRlsOrPermission: false,
+          }
+        ),
+      };
+    }
+
+    seenCursors.add(nextCursor);
+    currentCursor = nextCursor;
   }
 }

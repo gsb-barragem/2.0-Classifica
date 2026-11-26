@@ -43,6 +43,7 @@ import { BarragemMaster, EmpreendedorMaster, SistemaOrigem } from '../types';
 import { EcosystemSelector, ResponsavelTecnicoSearchItem } from './EcosystemSelector';
 import {
   createResponsavelTecnicoInAdministra,
+  resolveNonMaskedAdministraText,
   saveBarragemMaster,
   saveEmpreendedorMaster,
   syncClassificaProductToAdministra,
@@ -1362,35 +1363,40 @@ GSALARH/SEMA-MT`;
                    showRtSelector={true}
                    readOnly={readOnly}
                    onSelectEmpreendedor={(emp: EmpreendedorMaster) => {
-                     const digits = (emp.cpf_cnpj || '').replace(/\D/g, '');
+                     const safeCpfCnpj = resolveNonMaskedAdministraText(emp.cpf_cnpj, '');
+                     const digits = safeCpfCnpj.replace(/\D/g, '');
                      setFormData(p => ({
                        ...p,
                        empreendedorId: emp.id,
-                       novoProprietario: emp.razao_social || p.novoProprietario,
+                       novoProprietario: resolveNonMaskedAdministraText(emp.razao_social, p.novoProprietario),
                        novoTipoDoc: digits.length === 14 ? 'CNPJ' : digits.length === 11 ? 'CPF' : p.novoTipoDoc,
-                       novoDoc: emp.cpf_cnpj || p.novoDoc,
-                       municipio: emp.municipio || p.municipio,
+                       novoDoc: safeCpfCnpj || p.novoDoc,
+                       municipio: resolveNonMaskedAdministraText(emp.municipio, p.municipio),
                        sistemaOrigem: emp.sistema_origem || p.sistemaOrigem,
                      }));
                    }}
                    onSelectBarragem={(bar: BarragemMaster) => {
-                     const nextMun = bar.municipio || formData.municipio;
+                     const nextMun = resolveNonMaskedAdministraText(bar.municipio, formData.municipio);
                      const upgs = nextMun ? getUpgsForMunicipality(nextMun) : [];
+                     const safeZona = resolveNonMaskedAdministraText(bar.zona, '');
                      setFormData(p => ({
                        ...p,
                        barragemId: bar.id,
                        empreendedorId: bar.empreendedor_id || p.empreendedorId,
-                       snisb: bar.snisb || p.snisb,
-                       nomeFazenda: bar.nome || p.nomeFazenda,
+                       snisb: resolveNonMaskedAdministraText(bar.snisb, p.snisb),
+                       nomeFazenda: resolveNonMaskedAdministraText(bar.nome, p.nomeFazenda),
                        municipio: nextMun,
-                       upg: bar.upg || (upgs.length === 1 ? upgs[0] : p.upg),
-                       subBacia: bar.sub_bacia || p.subBacia,
-                       nomeCursoAgua: bar.curso_agua || p.nomeCursoAgua,
-                       zonaEndereco: bar.zona === 'Urbana' ? 'Urbana' : bar.zona ? 'Rural' : p.zonaEndereco,
+                       upg: resolveNonMaskedAdministraText(
+                         bar.upg,
+                         upgs.length === 1 ? upgs[0] : p.upg
+                       ),
+                       subBacia: resolveNonMaskedAdministraText(bar.sub_bacia, p.subBacia),
+                       nomeCursoAgua: resolveNonMaskedAdministraText(bar.curso_agua, p.nomeCursoAgua),
+                       zonaEndereco: safeZona === 'Urbana' ? 'Urbana' : safeZona ? 'Rural' : p.zonaEndereco,
                        latGMS: normalizeCoordinateToGMS(bar.lat_gms, bar.lat_decimal) || p.latGMS,
                        longGMS: normalizeCoordinateToGMS(bar.long_gms, bar.long_decimal) || p.longGMS,
-                       alturaMaxima: bar.altura_maxima || p.alturaMaxima,
-                       volumeArmazenado: bar.volume_nmm || p.volumeArmazenado,
+                       alturaMaxima: resolveNonMaskedAdministraText(bar.altura_maxima, p.alturaMaxima),
+                       volumeArmazenado: resolveNonMaskedAdministraText(bar.volume_nmm, p.volumeArmazenado),
                        sistemaOrigem: bar.sistema_origem || p.sistemaOrigem,
                      }));
                    }}

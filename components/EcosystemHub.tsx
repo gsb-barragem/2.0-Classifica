@@ -424,6 +424,8 @@ function extractDamClassification(bar: AdministraRecord, localDocs: AppDocument[
   };
 }
 
+export const MAX_BARRAGENS_V2_PAGES = 50;
+
 export interface BarragensV2CursorState {
   cursorHistory: Array<string | null>;
   cursorPageIndex: number;
@@ -431,16 +433,23 @@ export interface BarragensV2CursorState {
 
 export function advanceBarragensV2Cursor(
   state: BarragensV2CursorState,
-  pagination: Pick<BarragensV2Pagination, 'hasMore' | 'nextCursor'>
+  pagination: Pick<BarragensV2Pagination, 'hasMore' | 'nextCursor'>,
+  maxPages = MAX_BARRAGENS_V2_PAGES
 ): BarragensV2CursorState {
   if (!pagination.hasMore || !pagination.nextCursor) {
     return state;
   }
   const currentCursor = state.cursorHistory[state.cursorPageIndex] ?? null;
-  if (pagination.nextCursor === currentCursor) {
+  if (
+    pagination.nextCursor === currentCursor ||
+    state.cursorHistory.includes(pagination.nextCursor)
+  ) {
     return state;
   }
   const nextIndex = state.cursorPageIndex + 1;
+  if (nextIndex >= maxPages) {
+    return state;
+  }
   const prefix = state.cursorHistory.slice(0, nextIndex);
   return {
     cursorHistory: [...prefix, pagination.nextCursor],

@@ -47,6 +47,7 @@ import ConfirmModal from './ui/ConfirmModal';
 import { EcosystemSelector, ResponsavelTecnicoSearchItem } from './EcosystemSelector';
 import {
   createResponsavelTecnicoInAdministra,
+  resolveNonMaskedAdministraText,
   saveBarragemMaster,
   saveEmpreendedorMaster,
   syncClassificaProductToAdministra,
@@ -2123,11 +2124,11 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
             ...prev,
             orderInfo: {
               ...prev.orderInfo,
-              empreendedor: emp.razao_social || prev.orderInfo.empreendedor,
-              cpfCnpj: emp.cpf_cnpj || prev.orderInfo.cpfCnpj,
-              localizacao: emp.endereco || prev.orderInfo.localizacao,
-              municipio: emp.municipio || prev.orderInfo.municipio,
-              numCar: emp.num_car || prev.orderInfo.numCar,
+              empreendedor: resolveNonMaskedAdministraText(emp.razao_social, prev.orderInfo.empreendedor),
+              cpfCnpj: resolveNonMaskedAdministraText(emp.cpf_cnpj, prev.orderInfo.cpfCnpj),
+              localizacao: resolveNonMaskedAdministraText(emp.endereco, prev.orderInfo.localizacao),
+              municipio: resolveNonMaskedAdministraText(emp.municipio, prev.orderInfo.municipio),
+              numCar: resolveNonMaskedAdministraText(emp.num_car, prev.orderInfo.numCar),
             },
           }));
         }}
@@ -2140,21 +2141,21 @@ const NoObligatoryForm: React.FC<NoObligatoryFormProps> = ({ onBack, initialData
             ...prev,
             orderInfo: {
               ...prev.orderInfo,
-              municipio: bar.municipio || prev.orderInfo.municipio,
-              localizacao: bar.localizacao || prev.orderInfo.localizacao,
-              cursoAgua: bar.curso_agua || prev.orderInfo.cursoAgua,
-              subBacia: bar.sub_bacia || prev.orderInfo.subBacia,
+              municipio: resolveNonMaskedAdministraText(bar.municipio, prev.orderInfo.municipio),
+              localizacao: resolveNonMaskedAdministraText(bar.localizacao, prev.orderInfo.localizacao),
+              cursoAgua: resolveNonMaskedAdministraText(bar.curso_agua, prev.orderInfo.cursoAgua),
+              subBacia: resolveNonMaskedAdministraText(bar.sub_bacia, prev.orderInfo.subBacia),
             },
             damInfo: {
               ...prev.damInfo,
               principal: {
                 ...prev.damInfo.principal,
                 barragemId: bar.id,
-                nome: bar.nome || prev.damInfo.principal.nome,
+                nome: resolveNonMaskedAdministraText(bar.nome, prev.damInfo.principal.nome),
                 lat: normalizeCoordinateToGMS(bar.lat_gms, bar.lat_decimal) || prev.damInfo.principal.lat,
                 long: normalizeCoordinateToGMS(bar.long_gms, bar.long_decimal) || prev.damInfo.principal.long,
-                altura: bar.altura_maxima || prev.damInfo.principal.altura,
-                volume: bar.volume_nmm || prev.damInfo.principal.volume,
+                altura: resolveNonMaskedAdministraText(bar.altura_maxima, prev.damInfo.principal.altura),
+                volume: resolveNonMaskedAdministraText(bar.volume_nmm, prev.damInfo.principal.volume),
                 sistemaOrigem: bar.sistema_origem || prev.damInfo.principal.sistemaOrigem,
               },
             },
