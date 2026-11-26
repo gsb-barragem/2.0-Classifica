@@ -1101,6 +1101,99 @@ export function applyParecerFieldChange(
   return updated;
 }
 
+export function normalizeBarramentoMontanteComplemento(
+  input?: Partial<BarramentoData> | null
+): {
+  mesmoCarPrincipal: '' | 'sim' | 'nao';
+  carProprio: string;
+  empreendimentoNome: string;
+  empreendedorId: string;
+  empreendedorNome: string;
+  condicaoArea: '' | 'proprietario' | 'arrendatario';
+  vigenciaContratoAnos: string;
+  vigenciaInicio: string;
+} {
+  const mesmoCarPrincipal: '' | 'sim' | 'nao' =
+    input?.mesmoCarPrincipal === 'sim' || input?.mesmoCarPrincipal === 'nao'
+      ? input.mesmoCarPrincipal
+      : '';
+
+  const isDiferenteCar = mesmoCarPrincipal === 'nao';
+  const carProprio =
+    isDiferenteCar && typeof input?.carProprio === 'string' ? input.carProprio : '';
+  const empreendimentoNome =
+    isDiferenteCar && typeof input?.empreendimentoNome === 'string'
+      ? input.empreendimentoNome
+      : '';
+  const empreendedorId =
+    isDiferenteCar && typeof input?.empreendedorId === 'string'
+      ? input.empreendedorId.trim()
+      : '';
+  const empreendedorNome =
+    isDiferenteCar && typeof input?.empreendedorNome === 'string'
+      ? input.empreendedorNome
+      : '';
+
+  const { condicaoArea, vigenciaContratoAnos, vigenciaInicio } =
+    normalizeCondicaoAreaState(input || undefined);
+
+  return {
+    mesmoCarPrincipal,
+    carProprio,
+    empreendimentoNome,
+    empreendedorId,
+    empreendedorNome,
+    condicaoArea,
+    vigenciaContratoAnos,
+    vigenciaInicio,
+  };
+}
+
+export function applyMontanteBarramentoFieldUpdate(
+  current: BarramentoData,
+  field: keyof BarramentoData,
+  value: any
+): BarramentoData {
+  const additionalUpdates: Partial<BarramentoData> =
+    field === 'idade' ? { scoreIdade: evaluateCt5Age(value).score } : {};
+
+  if (field === 'mesmoCarPrincipal' && value !== 'nao') {
+    additionalUpdates.carProprio = '';
+    additionalUpdates.empreendimentoNome = '';
+    additionalUpdates.empreendedorId = '';
+    additionalUpdates.empreendedorNome = '';
+  }
+
+  if (field === 'condicaoArea' && value !== 'arrendatario') {
+    additionalUpdates.vigenciaContratoAnos = '';
+    additionalUpdates.vigenciaInicio = '';
+  }
+
+  return {
+    ...current,
+    [field]: value,
+    ...additionalUpdates,
+  };
+}
+
+export function validateUpstreamCondicaoAreaData(
+  barragensMontante?: BarramentoData[] | null
+): { valid: boolean; firstError: string | null } {
+  const list = Array.isArray(barragensMontante) ? barragensMontante : [];
+  for (let i = 0; i < list.length; i += 1) {
+    const bm = list[i];
+    const check = validateCondicaoAreaData(bm);
+    if (!check.valid && check.firstError) {
+      const label = bm?.nome?.trim() || `Barragem a Montante ${i + 1}`;
+      return {
+        valid: false,
+        firstError: `${label}: ${check.firstError}`,
+      };
+    }
+  }
+  return { valid: true, firstError: null };
+}
+
 export function buildParecerSavePayloads(params: {
   parecerId: string;
   userId: string;
@@ -1224,7 +1317,10 @@ export function buildParecerSavePayloads(params: {
       vigenciaInicio,
       responsaveisTecnicos: snapshot.responsaveisTecnicos || [],
       barragemPrincipal: snapshot.barragemPrincipal,
-      barragensMontante: snapshot.barragensMontante || [],
+      barragensMontante: (snapshot.barragensMontante || []).map((bm) => ({
+        ...bm,
+        ...normalizeBarramentoMontanteComplemento(bm),
+      })),
     },
   };
 

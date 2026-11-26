@@ -42,6 +42,7 @@ export function getVigenciaInicioWarning(value?: string): string | null {
 }
 
 interface CondicaoAreaEmpreendedorFieldsetProps {
+  idPrefix?: string;
   condicaoArea?: '' | 'proprietario' | 'arrendatario';
   vigenciaContratoAnos?: string;
   vigenciaInicio?: string;
@@ -53,6 +54,7 @@ interface CondicaoAreaEmpreendedorFieldsetProps {
 }
 
 export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedorFieldsetProps> = ({
+  idPrefix = '',
   condicaoArea = '',
   vigenciaContratoAnos = '',
   vigenciaInicio = '',
@@ -63,6 +65,9 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
   onClear,
 }) => {
   const isArrendatario = condicaoArea === 'arrendatario';
+  const selectId = `${idPrefix}condicao-area-select`;
+  const anosId = `${idPrefix}vigencia-contrato-anos`;
+  const inicioId = `${idPrefix}vigencia-inicio`;
   const vigenciaAnosError = isArrendatario
     ? getVigenciaContratoAnosWarning(vigenciaContratoAnos)
     : null;
@@ -95,13 +100,13 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div>
           <label
-            htmlFor="condicao-area-select"
+            htmlFor={selectId}
             className="block text-xs font-bold text-slate-500 mb-1"
           >
             Condição da área
           </label>
           <select
-            id="condicao-area-select"
+            id={selectId}
             disabled={readOnly}
             className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-2 text-sm focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none disabled:opacity-60 disabled:cursor-not-allowed"
             value={condicaoArea || ''}
@@ -121,13 +126,13 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
           <>
             <div>
               <label
-                htmlFor="vigencia-contrato-anos"
+                htmlFor={anosId}
                 className="block text-xs font-bold text-slate-500 mb-1"
               >
                 Vigência do contrato (anos)
               </label>
               <input
-                id="vigencia-contrato-anos"
+                id={anosId}
                 type="number"
                 min={1}
                 step={1}
@@ -151,13 +156,13 @@ export const CondicaoAreaEmpreendedorFieldset: React.FC<CondicaoAreaEmpreendedor
 
             <div>
               <label
-                htmlFor="vigencia-inicio"
+                htmlFor={inicioId}
                 className="block text-xs font-bold text-slate-500 mb-1"
               >
                 Início da vigência
               </label>
               <input
-                id="vigencia-inicio"
+                id={inicioId}
                 type="date"
                 disabled={readOnly || !isArrendatario}
                 aria-invalid={Boolean(vigenciaInicioError)}

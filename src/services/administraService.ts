@@ -1,5 +1,6 @@
 import {
   BarragemMaster,
+  BarramentoData,
   EmpreendedorMaster,
   EntidadeTipoEcossistema,
   ProdutoEcossistemaResumo,
@@ -656,25 +657,116 @@ export function mapCanonicalRt(
   };
 }
 
+export function applySelectedBarragemToMontante(
+  existing: BarramentoData,
+  bar: BarragemMaster
+): BarramentoData {
+  const pickIfEmpty = (
+    currentVal: string | null | undefined,
+    incomingVal: unknown
+  ): string => {
+    const trimmedCurrent = typeof currentVal === 'string' ? currentVal.trim() : '';
+    if (trimmedCurrent) {
+      return currentVal as string;
+    }
+    if (!isMaskedAdministraValue(incomingVal)) {
+      return String(incomingVal).trim();
+    }
+    return currentVal || '';
+  };
+
+  const currentNome = (existing.nome || '').trim();
+  const isPlaceholderNome =
+    !currentNome || /^Barragem a Montante \d+$/i.test(currentNome);
+  const incomingNome = !isMaskedAdministraValue(bar.nome) ? String(bar.nome).trim() : '';
+  const nextNome =
+    isPlaceholderNome &&
+    incomingNome &&
+    incomingNome.toLowerCase() !== 'barragem sem nome'
+      ? incomingNome
+      : existing.nome;
+
+  const incomingLatDec = safeCoordinateNumber(bar.lat_decimal, 90);
+  const incomingLongDec = safeCoordinateNumber(bar.long_decimal, 180);
+  const safeIncomingLat =
+    !isMaskedAdministraValue(bar.lat_gms) || incomingLatDec !== null
+      ? resolveSafeCoordinateGms(
+          isMaskedAdministraValue(bar.lat_gms) ? null : bar.lat_gms,
+          incomingLatDec,
+          90
+        )
+      : null;
+  const safeIncomingLong =
+    !isMaskedAdministraValue(bar.long_gms) || incomingLongDec !== null
+      ? resolveSafeCoordinateGms(
+          isMaskedAdministraValue(bar.long_gms) ? null : bar.long_gms,
+          incomingLongDec,
+          180
+        )
+      : null;
+
+  const nextLat = (existing.lat || '').trim() ? existing.lat : safeIncomingLat || '';
+  const nextLong = (existing.long || '').trim() ? existing.long : safeIncomingLong || '';
+
+  const isDiferenteCar = existing.mesmoCarPrincipal === 'nao';
+  const nextEmpreendedorId =
+    isDiferenteCar && !(existing.empreendedorId || '').trim() && !isMaskedAdministraValue(bar.empreendedor_id)
+      ? String(bar.empreendedor_id).trim()
+      : existing.empreendedorId;
+  const nextEmpreendedorNome =
+    isDiferenteCar && !(existing.empreendedorNome || '').trim() && !isMaskedAdministraValue(bar.empreendedor_nome)
+      ? String(bar.empreendedor_nome).trim()
+      : existing.empreendedorNome;
+
+  return {
+    ...existing,
+    barragemId: bar.id || existing.barragemId,
+    sistemaOrigem: bar.sistema_origem || existing.sistemaOrigem || 'ADMINISTRA_BARRAGENS',
+    nome: nextNome,
+    snisb: pickIfEmpty(existing.snisb, bar.snisb),
+    lat: nextLat,
+    long: nextLong,
+    alturaMaxima: pickIfEmpty(existing.alturaMaxima, bar.altura_maxima),
+    comprimentoCoroamento: pickIfEmpty(existing.comprimentoCoroamento, bar.comprimento_coroamento),
+    larguraCoroamento: pickIfEmpty(existing.larguraCoroamento, bar.largura_coroamento),
+    volumeNMO: pickIfEmpty(existing.volumeNMO, bar.volume_nmo),
+    volumeNMM: pickIfEmpty(existing.volumeNMM, bar.volume_nmm),
+    tipoEstrutural: pickIfEmpty(existing.tipoEstrutural, bar.tipo_estrutural),
+    tipoFundacao: pickIfEmpty(existing.tipoFundacao, bar.tipo_fundacao),
+    ...(isDiferenteCar
+      ? {
+          empreendedorId: nextEmpreendedorId || '',
+          empreendedorNome: nextEmpreendedorNome || '',
+        }
+      : {}),
+  };
+}
+
 export async function searchEmpreendedores(
   query = '',
-  pageSize = 25
+  pageSize = 25,
+  page = 1
 ): Promise<{
   data: EmpreendedorMaster[];
   configured: boolean;
   total?: number | null;
+  hasMore: boolean;
+  page: number;
   error?: string;
 }> {
   const clean = normalizeText(query);
   const safeLimit = Math.max(1, Math.min(50, pageSize));
+  const safePage = Math.max(1, Math.floor(Number.isFinite(page) ? page : 1));
 
-  const canonical = await fetchEmpreendedoresPage(1, safeLimit, clean);
+  const canonical = await fetchEmpreendedoresPage(safePage, safeLimit, clean);
   if (canonical.configured && !canonical.error) {
     const mapped = canonical.data.map((item) => mapCanonicalEmpreendedor(item.record));
     return {
       data: mapped,
       configured: true,
       total: canonical.total ?? mapped.length,
+      hasMore: Boolean(canonical.hasMore),
+      page: canonical.page ?? safePage,
     };
   }
 
@@ -684,6 +776,8 @@ export async function searchEmpreendedores(
       data: [],
       configured: canonical.configured,
       total: null,
+      hasMore: false,
+      page: safePage,
       error: canonical.error?.userMessage,
     };
   }
@@ -692,7 +786,13 @@ export async function searchEmpreendedores(
     const rpcRes = await client.rpc('administra_buscar_empreendedores', { p_termo: clean });
     if (!rpcRes.error && Array.isArray(rpcRes.data)) {
       const mapped = (rpcRes.data as Record<string, any>[]).map(mapCanonicalEmpreendedor);
-      return { data: mapped, configured: true, total: mapped.length };
+      return {
+        data: mapped,
+        configured: true,
+        total: mapped.length,
+        hasMore: false,
+        page: safePage,
+      };
     }
 
     let q = client
@@ -717,15 +817,25 @@ export async function searchEmpreendedores(
       return {
         data: [],
         configured: true,
+        hasMore: false,
+        page: safePage,
         error: 'Não foi possível consultar empreendedores no Administra.',
       };
     }
     const mapped = (data || []).map(mapCanonicalEmpreendedor);
-    return { data: mapped, configured: true, total: mapped.length };
+    return {
+      data: mapped,
+      configured: true,
+      total: mapped.length,
+      hasMore: false,
+      page: safePage,
+    };
   } catch {
     return {
       data: [],
       configured: true,
+      hasMore: false,
+      page: safePage,
       error: 'Falha de comunicação com o Administra Barragens.',
     };
   }
@@ -734,17 +844,22 @@ export async function searchEmpreendedores(
 export async function searchBarragens(
   query = '',
   empreendedorId?: string,
-  pageSize = 25
+  pageSize = 25,
+  page = 1
 ): Promise<{
   data: BarragemMaster[];
   configured: boolean;
   total?: number | null;
+  hasMore: boolean;
+  page: number;
+  serverFilteredByEmpreendedor?: boolean;
   error?: string;
 }> {
   const clean = normalizeText(query);
   const safeLimit = Math.max(1, Math.min(50, pageSize));
+  const safePage = Math.max(1, Math.floor(Number.isFinite(page) ? page : 1));
 
-  const canonical = await fetchBarragensPage(1, safeLimit, clean);
+  const canonical = await fetchBarragensPage(safePage, safeLimit, clean);
   if (canonical.configured && !canonical.error) {
     let mapped = canonical.data.map((item) =>
       mapCanonicalBarragem(item.record, item.empreendedor)
@@ -760,6 +875,9 @@ export async function searchBarragens(
       data: mapped,
       configured: true,
       total: canonical.total ?? mapped.length,
+      hasMore: Boolean(canonical.hasMore),
+      page: canonical.page ?? safePage,
+      serverFilteredByEmpreendedor: false,
     };
   }
 
@@ -769,6 +887,9 @@ export async function searchBarragens(
       data: [],
       configured: canonical.configured,
       total: null,
+      hasMore: false,
+      page: safePage,
+      serverFilteredByEmpreendedor: false,
       error: canonical.error?.userMessage,
     };
   }
@@ -782,7 +903,14 @@ export async function searchBarragens(
       const mapped = (rpcRes.data as Record<string, any>[]).map((r) =>
         mapCanonicalBarragem(r)
       );
-      return { data: mapped, configured: true, total: mapped.length };
+      return {
+        data: mapped,
+        configured: true,
+        total: mapped.length,
+        hasMore: false,
+        page: safePage,
+        serverFilteredByEmpreendedor: Boolean(empreendedorId),
+      };
     }
 
     let q = client
@@ -805,15 +933,28 @@ export async function searchBarragens(
       return {
         data: [],
         configured: true,
+        hasMore: false,
+        page: safePage,
+        serverFilteredByEmpreendedor: Boolean(empreendedorId),
         error: 'Não foi possível consultar barragens no Administra.',
       };
     }
     const mapped = (data || []).map((r) => mapCanonicalBarragem(r));
-    return { data: mapped, configured: true, total: mapped.length };
+    return {
+      data: mapped,
+      configured: true,
+      total: mapped.length,
+      hasMore: false,
+      page: safePage,
+      serverFilteredByEmpreendedor: Boolean(empreendedorId),
+    };
   } catch {
     return {
       data: [],
       configured: true,
+      hasMore: false,
+      page: safePage,
+      serverFilteredByEmpreendedor: false,
       error: 'Falha de comunicação com o Administra Barragens.',
     };
   }
@@ -821,17 +962,21 @@ export async function searchBarragens(
 
 export async function searchResponsaveisTecnicos(
   query = '',
-  pageSize = 25
+  pageSize = 25,
+  page = 1
 ): Promise<{
   data: Array<ResponsavelTecnicoMaster & { art?: string | null; arts?: RtArtVinculo[] }>;
   configured: boolean;
   total?: number | null;
+  hasMore: boolean;
+  page: number;
   error?: string;
 }> {
   const clean = normalizeText(query);
   const safeLimit = Math.max(1, Math.min(50, pageSize));
+  const safePage = Math.max(1, Math.floor(Number.isFinite(page) ? page : 1));
 
-  const canonical = await fetchRtsPage(1, safeLimit, clean);
+  const canonical = await fetchRtsPage(safePage, safeLimit, clean);
   if (canonical.configured && !canonical.error) {
     const mapped = canonical.data.map((item) =>
       mapCanonicalRt(item.record, item.vinculosBarragem)
@@ -840,6 +985,8 @@ export async function searchResponsaveisTecnicos(
       data: mapped,
       configured: true,
       total: canonical.total ?? mapped.length,
+      hasMore: Boolean(canonical.hasMore),
+      page: canonical.page ?? safePage,
     };
   }
 
@@ -849,6 +996,8 @@ export async function searchResponsaveisTecnicos(
       data: [],
       configured: canonical.configured,
       total: null,
+      hasMore: false,
+      page: safePage,
       error: canonical.error?.userMessage,
     };
   }
@@ -857,7 +1006,13 @@ export async function searchResponsaveisTecnicos(
     const rpcRes = await client.rpc('administra_buscar_rts', { p_termo: clean });
     if (!rpcRes.error && Array.isArray(rpcRes.data)) {
       const mapped = (rpcRes.data as Record<string, any>[]).map((r) => mapCanonicalRt(r));
-      return { data: mapped, configured: true, total: mapped.length };
+      return {
+        data: mapped,
+        configured: true,
+        total: mapped.length,
+        hasMore: false,
+        page: safePage,
+      };
     }
 
     let q = client
@@ -877,15 +1032,25 @@ export async function searchResponsaveisTecnicos(
       return {
         data: [],
         configured: true,
+        hasMore: false,
+        page: safePage,
         error: 'Não foi possível consultar responsáveis técnicos no Administra.',
       };
     }
     const mapped = (data || []).map((r) => mapCanonicalRt(r));
-    return { data: mapped, configured: true, total: mapped.length };
+    return {
+      data: mapped,
+      configured: true,
+      total: mapped.length,
+      hasMore: false,
+      page: safePage,
+    };
   } catch {
     return {
       data: [],
       configured: true,
+      hasMore: false,
+      page: safePage,
       error: 'Falha de comunicação com o Administra Barragens.',
     };
   }

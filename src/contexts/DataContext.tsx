@@ -3,6 +3,7 @@ import { ParecerData, OficioData, NoObligatoryData, RejectionData, TransferData 
 import { supabase } from '../supabaseClient';
 import { AuthContext } from './AuthContext';
 import { normalizeCoordinateToGMS } from '../utils/coordinateUtils';
+import { normalizeBarramentoMontanteComplemento } from '../utils/opinionCalculations';
 
 export type AppDocument = (
   | (ParecerData & { tipo_documento: 'Parecer Técnico' }) 
@@ -192,55 +193,84 @@ export function mapParecerRowToParecerData(p: any): ParecerData {
             })) || []
           } : {} as any,
 
-          barragensMontante: montanteBars.map((b: any, idx: number) => {
-            const baseMont = Array.isArray(baseData.barragensMontante)
-              ? (baseData.barragensMontante.find((bm: any) => bm.id === b.id || (bm.nome && bm.nome === b.nome)) || baseData.barragensMontante[idx])
-              : undefined;
-            return {
-              id: b.id,
-              nome: b.nome,
-              snisb: b.snisb,
-              lat: normalizeCoordinateToGMS(b.lat),
-              long: normalizeCoordinateToGMS(b.long),
-              alturaMaxima: b.altura_maxima,
-              alturaMaximaFls: b.altura_maxima_fls,
-              bordaLivre: b.borda_livre,
-              bordaLivreFls: b.borda_livre_fls,
-              cotaCoroamento: b.cota_coroamento,
-              cotaCoroamentoFls: b.cota_coroamento_fls,
-              comprimentoCoroamento: b.comprimento_coroamento,
-              comprimentoCoroamentoFls: b.comprimento_coroamento_fls,
-              larguraCoroamento: b.largura_coroamento,
-              larguraCoroamentoFls: b.largura_coroamento_fls,
-              tipoEstrutural: b.tipo_estrutural,
-              tipoFundacao: b.tipo_fundacao,
-              idade: b.idade,
-              scoreIdade: b.score_idade,
-              cotaNNO: b.cota_nno,
-              cotaNMM: b.cota_nmm,
-              areaNNO: b.area_nno,
-              areaNMM: b.area_nmm,
-              volumeNMO: b.volume_nmo,
-              volumeNMM: b.volume_nmm,
-              vazaoMaxima: b.vazao_maxima,
-              possuiAdequacao: b.possui_adequacao,
-              adequacaoVazao: b.adequacao_vazao,
-              adequacaoCota: b.adequacao_cota,
-              adequacaoLocalizacao: b.adequacao_localizacao,
-              adequacaoVazaoRemanescente: b.adequacao_vazao_remanescente,
-              adequacaoSeguranca: b.adequacao_seguranca,
-              barragemId: b.barragem_id || baseMont?.barragemId,
-              sistemaOrigem: baseMont?.sistemaOrigem,
-              estruturas: b.parecer_estruturas?.map((e: any) => ({
-                id: e.id,
-                descricao: e.descricao,
-                vazao: e.vazao,
-                cotaSoleira: e.cota_soleira,
-                localizacao: e.localizacao,
-                seguranca: e.seguranca
-              })) || []
-            };
-          }),
+          barragensMontante: (() => {
+            const jsonMontanteList = Array.isArray(baseData.barragensMontante)
+              ? baseData.barragensMontante
+              : Array.isArray(nestedBaseData.barragensMontante)
+              ? nestedBaseData.barragensMontante
+              : [];
+
+            if (montanteBars.length > 0) {
+              return montanteBars.map((b: any, idx: number) => {
+                const baseMont =
+                  jsonMontanteList.find(
+                    (bm: any) =>
+                      (bm?.id && bm.id === b.id) ||
+                      (bm?.barragemId && b.barragem_id && bm.barragemId === b.barragem_id) ||
+                      (bm?.nome && b.nome && bm.nome === b.nome)
+                  ) || jsonMontanteList[idx];
+                const complemento = normalizeBarramentoMontanteComplemento(baseMont);
+
+                return {
+                  id: b.id,
+                  nome: b.nome,
+                  snisb: b.snisb,
+                  lat: normalizeCoordinateToGMS(b.lat),
+                  long: normalizeCoordinateToGMS(b.long),
+                  relacaoBarragemPrincipal: baseMont?.relacaoBarragemPrincipal || '',
+                  alturaMaxima: b.altura_maxima,
+                  alturaMaximaFls: b.altura_maxima_fls,
+                  bordaLivre: b.borda_livre,
+                  bordaLivreFls: b.borda_livre_fls,
+                  cotaCoroamento: b.cota_coroamento,
+                  cotaCoroamentoFls: b.cota_coroamento_fls,
+                  comprimentoCoroamento: b.comprimento_coroamento,
+                  comprimentoCoroamentoFls: b.comprimento_coroamento_fls,
+                  larguraCoroamento: b.largura_coroamento,
+                  larguraCoroamentoFls: b.largura_coroamento_fls,
+                  tipoEstrutural: b.tipo_estrutural,
+                  tipoFundacao: b.tipo_fundacao,
+                  idade: b.idade,
+                  scoreIdade: b.score_idade,
+                  cotaNNO: b.cota_nno,
+                  cotaNMM: b.cota_nmm,
+                  areaNNO: b.area_nno,
+                  areaNMM: b.area_nmm,
+                  volumeNMO: b.volume_nmo,
+                  volumeNMM: b.volume_nmm,
+                  vazaoMaxima: b.vazao_maxima,
+                  possuiAdequacao: b.possui_adequacao,
+                  adequacaoVazao: b.adequacao_vazao,
+                  adequacaoCota: b.adequacao_cota,
+                  adequacaoLocalizacao: b.adequacao_localizacao,
+                  adequacaoVazaoRemanescente: b.adequacao_vazao_remanescente,
+                  adequacaoSeguranca: b.adequacao_seguranca,
+                  barragemId: b.barragem_id || baseMont?.barragemId,
+                  sistemaOrigem: baseMont?.sistemaOrigem,
+                  ...complemento,
+                  estruturas:
+                    b.parecer_estruturas?.map((e: any) => ({
+                      id: e.id,
+                      descricao: e.descricao,
+                      vazao: e.vazao,
+                      cotaSoleira: e.cota_soleira,
+                      localizacao: e.localizacao,
+                      seguranca: e.seguranca,
+                    })) || [],
+                };
+              });
+            }
+
+            return jsonMontanteList.map((bm: any, idx: number) => ({
+              ...bm,
+              id: bm?.id || `montante_${idx}`,
+              lat: normalizeCoordinateToGMS(bm?.lat),
+              long: normalizeCoordinateToGMS(bm?.long),
+              relacaoBarragemPrincipal: bm?.relacaoBarragemPrincipal || '',
+              ...normalizeBarramentoMontanteComplemento(bm),
+              estruturas: Array.isArray(bm?.estruturas) ? bm.estruturas : [],
+            }));
+          })(),
 
           classificacao: {
             dpa1Select: p.dpa1_select,

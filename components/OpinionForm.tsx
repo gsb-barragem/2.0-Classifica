@@ -30,12 +30,15 @@ import { generateParecerDoc } from '../services/docxService';
 import { AuthContext } from '../src/contexts/AuthContext';
 import { logActivity } from '../src/lib/auditService';
 import {
+  applySelectedBarragemToMontante,
+  resolveNonMaskedAdministraText,
   saveBarragemMaster,
   syncClassificaProductToAdministra,
 } from '../src/services/administraService';
 import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../src/config/integrationArchitecture';
 import { supabase } from '../src/supabaseClient';
 import {
+  applyMontanteBarramentoFieldUpdate,
   applyParecerFieldChange,
   buildParecerSavePayloads,
   buildSuggestedParecerText,
@@ -43,16 +46,20 @@ import {
   evaluateCt5Age,
   getUpgOptionsForMunicipality,
   isPreClassificacaoTipo,
+  normalizeBarramentoMontanteComplemento,
   normalizeCondicaoAreaState,
   validateCondicaoAreaData,
+  validateUpstreamCondicaoAreaData,
 } from '../src/utils/opinionCalculations';
 import { normalizeCoordinateToGMS } from '../src/utils/coordinateUtils';
 import { OperationType, handleSupabaseError } from '../src/utils/supabaseErrorHandler';
 import {
+  BarragemMaster,
   BarramentoData,
   ClassificacaoData,
   DanoEnum,
   DocItem,
+  EmpreendedorMaster,
   EstruturaHidraulica,
   ParecerData,
   RiscoEnum,
@@ -98,6 +105,14 @@ const createEmptyBarramento = (id: string, nomePadrao = ''): BarramentoData => (
   lat: '',
   long: '',
   relacaoBarragemPrincipal: '',
+  mesmoCarPrincipal: '',
+  carProprio: '',
+  empreendimentoNome: '',
+  empreendedorId: '',
+  empreendedorNome: '',
+  condicaoArea: '',
+  vigenciaContratoAnos: '',
+  vigenciaInicio: '',
   alturaMaxima: '',
   alturaMaximaFls: '',
   bordaLivre: '',
@@ -403,6 +418,7 @@ export function hydrateParecerInitialData(initialData: ParecerData): ParecerData
           lat: normalizeCoordinateToGMS(bm.lat),
           long: normalizeCoordinateToGMS(bm.long),
           relacaoBarragemPrincipal: bm.relacaoBarragemPrincipal || '',
+          ...normalizeBarramentoMontanteComplemento(bm),
           possuiAdequacao: Boolean(bm.possuiAdequacao),
           estruturas:
             bm.estruturas && bm.estruturas.length > 0
@@ -715,12 +731,11 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     value: any
   ) => {
     setFormData((prev) => {
-      const additionalUpdates: Partial<BarramentoData> =
-        field === 'idade'
-          ? { scoreIdade: evaluateCt5Age(value).score }
-          : {};
-
       if (isMain) {
+        const additionalUpdates: Partial<BarramentoData> =
+          field === 'idade'
+            ? { scoreIdade: evaluateCt5Age(value).score }
+            : {};
         return {
           ...prev,
           barragemPrincipal: { ...prev.barragemPrincipal, [field]: value, ...additionalUpdates },
@@ -728,7 +743,51 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       }
 
       const newArr = [...prev.barragensMontante];
-      newArr[idx] = { ...newArr[idx], [field]: value, ...additionalUpdates };
+      if (!newArr[idx]) return prev;
+      newArr[idx] = applyMontanteBarramentoFieldUpdate(newArr[idx], field, value);
+      return { ...prev, barragensMontante: newArr };
+    });
+  };
+
+  const handleSelectUpstreamBarragem = (idx: number, bar: BarragemMaster) => {
+    setFormData((prev) => {
+      const newArr = [...(prev.barragensMontante || [])];
+      if (!newArr[idx]) return prev;
+      newArr[idx] = applySelectedBarragemToMontante(newArr[idx], bar);
+      return { ...prev, barragensMontante: newArr };
+    });
+  };
+
+  const handleSelectUpstreamEmpreendedor = (idx: number, emp: EmpreendedorMaster) => {
+    setFormData((prev) => {
+      const newArr = [...(prev.barragensMontante || [])];
+      const current = newArr[idx];
+      if (!current) return prev;
+      const nextNome = resolveNonMaskedAdministraText(emp.razao_social, current.empreendedorNome);
+      const nextCar =
+        current.mesmoCarPrincipal === 'nao' && !(current.carProprio || '').trim()
+          ? resolveNonMaskedAdministraText(emp.num_car, '')
+          : current.carProprio;
+      newArr[idx] = {
+        ...current,
+        empreendedorId: emp.id,
+        empreendedorNome: nextNome,
+        carProprio: nextCar,
+      };
+      return { ...prev, barragensMontante: newArr };
+    });
+  };
+
+  const handleClearUpstreamEmpreendedor = (idx: number) => {
+    setFormData((prev) => {
+      const newArr = [...(prev.barragensMontante || [])];
+      const current = newArr[idx];
+      if (!current) return prev;
+      newArr[idx] = {
+        ...current,
+        empreendedorId: '',
+        empreendedorNome: '',
+      };
       return { ...prev, barragensMontante: newArr };
     });
   };
@@ -850,6 +909,7 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
         lat: normalizeCoordinateToGMS(bm.lat),
         long: normalizeCoordinateToGMS(bm.long),
         scoreIdade: evaluateCt5Age(bm.idade).score,
+        ...normalizeBarramentoMontanteComplemento(bm),
       })),
       classificacao: {
         ...cls,
@@ -1136,6 +1196,12 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     const condicaoValidation = validateCondicaoAreaData(formData);
     if (!condicaoValidation.valid && condicaoValidation.firstError) {
       toast.error(condicaoValidation.firstError);
+      return;
+    }
+
+    const upstreamCondicaoValidation = validateUpstreamCondicaoAreaData(formData.barragensMontante);
+    if (!upstreamCondicaoValidation.valid && upstreamCondicaoValidation.firstError) {
+      toast.error(upstreamCondicaoValidation.firstError);
       return;
     }
 
@@ -1797,9 +1863,13 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
             barragemPrincipal={formData.barragemPrincipal}
             barragensMontante={formData.barragensMontante}
             barragemId={formData.barragemId}
+            mainCarFallback={formData.numCAR}
             registeringBarragemKey={registeringBarragemKey}
             onRegisterBarragem={handleRegisterBarragem}
             onUnlinkBarragem={handleUnlinkBarragem}
+            onSelectUpstreamBarragem={handleSelectUpstreamBarragem}
+            onSelectUpstreamEmpreendedor={handleSelectUpstreamEmpreendedor}
+            onClearUpstreamEmpreendedor={handleClearUpstreamEmpreendedor}
             isOpen={openSections.barramento}
             readOnly={readOnly}
             onToggleSection={() => toggleSection('barramento')}

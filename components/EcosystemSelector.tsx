@@ -40,11 +40,23 @@ import { isAdministraConfigured } from '../src/lib/ecosystemClients';
 import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../src/config/integrationArchitecture';
 import { DataContext } from '../src/contexts/DataContext';
 import { AuthContext } from '../src/contexts/AuthContext';
+import {
+  applyPaginatedPageResult,
+  createInitialPaginatedState,
+  formatPaginationCounterText,
+  getAdministraBarragemFilterCapabilities,
+  mergeUniqueById,
+  PaginatedEntityState,
+  preserveSelectedItemInList,
+  resetPaginatedSearchState,
+} from '../src/utils/administraPagination';
 
 export type ResponsavelTecnicoSearchItem = ResponsavelTecnicoMaster & {
   art?: string | null;
   arts?: RtArtVinculo[];
 };
+
+const PAGE_SIZE = 25;
 
 interface EcosystemSelectorProps {
   selectedEmpreendedorId?: string;
@@ -70,17 +82,6 @@ function normalizeSearchText(val?: string | null): string {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim();
-}
-
-function mergeUniqueById<T extends { id: string }>(primary: T[], secondary: T[]): T[] {
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const item of [...primary, ...secondary]) {
-    if (!item?.id || seen.has(item.id)) continue;
-    seen.add(item.id);
-    out.push(item);
-  }
-  return out;
 }
 
 export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
@@ -115,15 +116,33 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
   const [debouncedBarTerm, setDebouncedBarTerm] = useState('');
   const [debouncedRtTerm, setDebouncedRtTerm] = useState('');
 
-  // Listas iniciais para os <select>
-  const [empOptions, setEmpOptions] = useState<EmpreendedorMaster[]>([]);
-  const [barOptions, setBarOptions] = useState<BarragemMaster[]>([]);
-  const [rtOptions, setRtOptions] = useState<ResponsavelTecnicoSearchItem[]>([]);
+  // Estados paginados para listas de navegação (<select>) e buscas ativas
+  const [empPageState, setEmpPageState] = useState<PaginatedEntityState<EmpreendedorMaster>>(() =>
+    createInitialPaginatedState<EmpreendedorMaster>(PAGE_SIZE)
+  );
+  const [barPageState, setBarPageState] = useState<PaginatedEntityState<BarragemMaster>>(() =>
+    createInitialPaginatedState<BarragemMaster>(PAGE_SIZE)
+  );
+  const [rtPageState, setRtPageState] = useState<PaginatedEntityState<ResponsavelTecnicoSearchItem>>(() =>
+    createInitialPaginatedState<ResponsavelTecnicoSearchItem>(PAGE_SIZE)
+  );
 
-  // Resultados retornados pela busca no servidor Administra
-  const [empSearchResults, setEmpSearchResults] = useState<EmpreendedorMaster[]>([]);
-  const [barSearchResults, setBarSearchResults] = useState<BarragemMaster[]>([]);
-  const [rtSearchResults, setRtSearchResults] = useState<ResponsavelTecnicoSearchItem[]>([]);
+  const [empSearchState, setEmpSearchState] = useState<PaginatedEntityState<EmpreendedorMaster>>(() =>
+    createInitialPaginatedState<EmpreendedorMaster>(PAGE_SIZE)
+  );
+  const [barSearchState, setBarSearchState] = useState<PaginatedEntityState<BarragemMaster>>(() =>
+    createInitialPaginatedState<BarragemMaster>(PAGE_SIZE)
+  );
+  const [rtSearchState, setRtSearchState] = useState<PaginatedEntityState<ResponsavelTecnicoSearchItem>>(() =>
+    createInitialPaginatedState<ResponsavelTecnicoSearchItem>(PAGE_SIZE)
+  );
+
+  const [selectedEmpRecord, setSelectedEmpRecord] = useState<EmpreendedorMaster | null>(null);
+  const [selectedBarRecord, setSelectedBarRecord] = useState<BarragemMaster | null>(null);
+  const selectedEmpRecordRef = useRef<EmpreendedorMaster | null>(null);
+  const selectedBarRecordRef = useRef<BarragemMaster | null>(null);
+  const selectedRtRecordRef = useRef<ResponsavelTecnicoSearchItem | null>(null);
+  const barragemFilterCapabilities = useMemo(() => getAdministraBarragemFilterCapabilities(), []);
 
   const [empSearchError, setEmpSearchError] = useState<string | null>(null);
   const [barSearchError, setBarSearchError] = useState<string | null>(null);
@@ -152,8 +171,14 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
   const [newRtError, setNewRtError] = useState<string | null>(null);
 
   const [loadingEmp, setLoadingEmp] = useState(false);
+  const [loadingMoreEmp, setLoadingMoreEmp] = useState(false);
+  const [loadingMoreEmpSearch, setLoadingMoreEmpSearch] = useState(false);
   const [loadingBar, setLoadingBar] = useState(false);
+  const [loadingMoreBar, setLoadingMoreBar] = useState(false);
+  const [loadingMoreBarSearch, setLoadingMoreBarSearch] = useState(false);
   const [loadingRt, setLoadingRt] = useState(false);
+  const [loadingMoreRt, setLoadingMoreRt] = useState(false);
+  const [loadingMoreRtSearch, setLoadingMoreRtSearch] = useState(false);
   const [refreshingBase, setRefreshingBase] = useState(false);
 
   const [administraReady, setAdministraReady] = useState<boolean>(() =>
@@ -172,6 +197,40 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
 
   const [relatedProducts, setRelatedProducts] = useState<ProdutoEcossistemaResumo[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
+
+  selectedEmpRecordRef.current = selectedEmpRecord;
+  selectedBarRecordRef.current = selectedBarRecord;
+  selectedRtRecordRef.current = selectedRtRecord;
+
+  const empOptions = empPageState.items;
+  const barOptions = barPageState.items;
+  const rtOptions = rtPageState.items;
+
+  useEffect(() => {
+    if (!selectedEmpreendedorId) {
+      setSelectedEmpRecord(null);
+      return;
+    }
+    const found =
+      empPageState.items.find((item) => item.id === selectedEmpreendedorId) ||
+      empSearchState.items.find((item) => item.id === selectedEmpreendedorId);
+    if (found) {
+      setSelectedEmpRecord(found);
+    }
+  }, [selectedEmpreendedorId, empPageState.items, empSearchState.items]);
+
+  useEffect(() => {
+    if (!selectedBarragemId) {
+      setSelectedBarRecord(null);
+      return;
+    }
+    const found =
+      barPageState.items.find((item) => item.id === selectedBarragemId) ||
+      barSearchState.items.find((item) => item.id === selectedBarragemId);
+    if (found) {
+      setSelectedBarRecord(found);
+    }
+  }, [selectedBarragemId, barPageState.items, barSearchState.items]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedEmpTerm(empTerm), 200);
@@ -210,94 +269,160 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     });
   }, []);
 
-  const loadInitialEmpreendedores = useCallback(async () => {
-    setLoadingEmp(true);
-    try {
-      const res = await searchEmpreendedores('', 25);
-      if (res.configured && !res.error) {
-        setEmpOptions((prev) => mergeUniqueById(res.data, prev));
-        setAdministraReady(true);
-        setStatusError(null);
-        setEmpSearchError(null);
-        if (typeof res.total === 'number') {
-          setCounts((prev) => ({
-            ...prev,
-            empreendedores: prev.empreendedores ?? res.total ?? null,
-          }));
-        }
-      } else if (res.error) {
-        setStatusError((prev) => prev || res.error || null);
+  const fetchEmpreendedoresBrowsePage = useCallback(
+    async (page: number, append: boolean) => {
+      if (append) {
+        setLoadingMoreEmp(true);
+      } else {
+        setLoadingEmp(true);
       }
-    } finally {
-      setLoadingEmp(false);
-    }
-  }, []);
+      try {
+        const res = await searchEmpreendedores('', PAGE_SIZE, page);
+        if (res.configured && !res.error) {
+          setEmpPageState((prev) =>
+            applyPaginatedPageResult(prev, {
+              query: '',
+              page: res.page || page,
+              pageSize: PAGE_SIZE,
+              items: res.data,
+              hasMore: res.hasMore,
+              total: typeof res.total === 'number' ? res.total : null,
+              append,
+              selectedItem: selectedEmpRecordRef.current,
+            })
+          );
+          setAdministraReady(true);
+          setStatusError(null);
+          setEmpSearchError(null);
+          if (typeof res.total === 'number') {
+            setCounts((prev) => ({
+              ...prev,
+              empreendedores: prev.empreendedores ?? res.total ?? null,
+            }));
+          }
+        } else if (res.error) {
+          setStatusError((prev) => prev || res.error || null);
+        }
+      } finally {
+        if (append) {
+          setLoadingMoreEmp(false);
+        } else {
+          setLoadingEmp(false);
+        }
+      }
+    },
+    []
+  );
 
-  const loadInitialBarragens = useCallback(async (empId?: string) => {
-    setLoadingBar(true);
-    try {
-      const res = await searchBarragens('', empId, 25);
-      if (res.configured && !res.error) {
-        setBarOptions((prev) => mergeUniqueById(res.data, prev));
-        setAdministraReady(true);
-        setStatusError(null);
-        setBarSearchError(null);
-        if (typeof res.total === 'number') {
-          setCounts((prev) => ({
-            ...prev,
-            barragens: prev.barragens ?? res.total ?? null,
-          }));
-        }
-      } else if (res.error) {
-        setStatusError((prev) => prev || res.error || null);
+  const fetchBarragensBrowsePage = useCallback(
+    async (page: number, append: boolean, empId?: string) => {
+      if (append) {
+        setLoadingMoreBar(true);
+      } else {
+        setLoadingBar(true);
       }
-    } finally {
-      setLoadingBar(false);
-    }
-  }, []);
+      try {
+        const res = await searchBarragens('', empId, PAGE_SIZE, page);
+        if (res.configured && !res.error) {
+          setBarPageState((prev) =>
+            applyPaginatedPageResult(prev, {
+              query: '',
+              page: res.page || page,
+              pageSize: PAGE_SIZE,
+              items: res.data,
+              hasMore: res.hasMore,
+              total: typeof res.total === 'number' ? res.total : null,
+              append,
+              selectedItem: selectedBarRecordRef.current,
+            })
+          );
+          setAdministraReady(true);
+          setStatusError(null);
+          setBarSearchError(null);
+          if (typeof res.total === 'number') {
+            setCounts((prev) => ({
+              ...prev,
+              barragens: prev.barragens ?? res.total ?? null,
+            }));
+          }
+        } else if (res.error) {
+          setStatusError((prev) => prev || res.error || null);
+        }
+      } finally {
+        if (append) {
+          setLoadingMoreBar(false);
+        } else {
+          setLoadingBar(false);
+        }
+      }
+    },
+    []
+  );
 
-  const loadInitialRts = useCallback(async () => {
-    if (!showRtSelector) return;
-    setLoadingRt(true);
-    try {
-      const res = await searchResponsaveisTecnicos('', 25);
-      if (res.configured && !res.error) {
-        setRtOptions((prev) => mergeUniqueById(res.data, prev));
-        setAdministraReady(true);
-        setStatusError(null);
-        setRtSearchError(null);
-        if (typeof res.total === 'number') {
-          setCounts((prev) => ({
-            ...prev,
-            rts: prev.rts ?? res.total ?? null,
-          }));
-        }
-      } else if (res.error) {
-        setStatusError((prev) => prev || res.error || null);
+  const fetchRtsBrowsePage = useCallback(
+    async (page: number, append: boolean) => {
+      if (!showRtSelector) return;
+      if (append) {
+        setLoadingMoreRt(true);
+      } else {
+        setLoadingRt(true);
       }
-    } finally {
-      setLoadingRt(false);
-    }
-  }, [showRtSelector]);
+      try {
+        const res = await searchResponsaveisTecnicos('', PAGE_SIZE, page);
+        if (res.configured && !res.error) {
+          setRtPageState((prev) =>
+            applyPaginatedPageResult(prev, {
+              query: '',
+              page: res.page || page,
+              pageSize: PAGE_SIZE,
+              items: res.data,
+              hasMore: res.hasMore,
+              total: typeof res.total === 'number' ? res.total : null,
+              append,
+              selectedItem: selectedRtRecordRef.current,
+            })
+          );
+          setAdministraReady(true);
+          setStatusError(null);
+          setRtSearchError(null);
+          if (typeof res.total === 'number') {
+            setCounts((prev) => ({
+              ...prev,
+              rts: prev.rts ?? res.total ?? null,
+            }));
+          }
+        } else if (res.error) {
+          setStatusError((prev) => prev || res.error || null);
+        }
+      } finally {
+        if (append) {
+          setLoadingMoreRt(false);
+        } else {
+          setLoadingRt(false);
+        }
+      }
+    },
+    [showRtSelector]
+  );
 
   useEffect(() => {
     if (readOnly) return;
     void loadDiagnostics();
-    void loadInitialEmpreendedores();
-    if (showRtSelector) void loadInitialRts();
-  }, [readOnly, showRtSelector, loadDiagnostics, loadInitialEmpreendedores, loadInitialRts]);
+    void fetchEmpreendedoresBrowsePage(1, false);
+    if (showRtSelector) void fetchRtsBrowsePage(1, false);
+  }, [readOnly, showRtSelector, loadDiagnostics, fetchEmpreendedoresBrowsePage, fetchRtsBrowsePage]);
 
   useEffect(() => {
     if (readOnly) return;
-    void loadInitialBarragens(selectedEmpreendedorId);
-  }, [readOnly, selectedEmpreendedorId, loadInitialBarragens]);
+    void fetchBarragensBrowsePage(1, false, selectedEmpreendedorId);
+  }, [readOnly, selectedEmpreendedorId, fetchBarragensBrowsePage]);
 
-  // Busca ativa de Empreendedores ao digitar qualquer dado
+  // Busca ativa de Empreendedores ao digitar qualquer dado (reinicia paginação ao mudar termo)
   useEffect(() => {
     if (readOnly) return;
     const term = debouncedEmpTerm.trim();
     if (!term) {
-      setEmpSearchResults([]);
+      setEmpSearchState(createInitialPaginatedState<EmpreendedorMaster>(PAGE_SIZE));
       setEmpSearchError(null);
       return;
     }
@@ -305,15 +430,26 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     let alive = true;
     setLoadingEmp(true);
     setEmpSearchError(null);
-    void searchEmpreendedores(term, 25)
+    setEmpSearchState(resetPaginatedSearchState<EmpreendedorMaster>(term, PAGE_SIZE));
+    void searchEmpreendedores(term, PAGE_SIZE, 1)
       .then((res) => {
         if (!alive) return;
         if (res.error) {
-          setEmpSearchResults([]);
+          setEmpSearchState(resetPaginatedSearchState<EmpreendedorMaster>(term, PAGE_SIZE));
           setEmpSearchError(res.error);
           setStatusError((prev) => prev || res.error || null);
         } else {
-          setEmpSearchResults(res.data);
+          setEmpSearchState((prev) =>
+            applyPaginatedPageResult(prev, {
+              query: term,
+              page: res.page || 1,
+              pageSize: PAGE_SIZE,
+              items: res.data,
+              hasMore: res.hasMore,
+              total: typeof res.total === 'number' ? res.total : null,
+              append: false,
+            })
+          );
           setAdministraReady(true);
           setEmpSearchError(null);
         }
@@ -327,12 +463,12 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     };
   }, [debouncedEmpTerm, readOnly]);
 
-  // Busca ativa de Barragens ao digitar qualquer dado
+  // Busca ativa de Barragens ao digitar qualquer dado (reinicia paginação ao mudar termo)
   useEffect(() => {
     if (readOnly) return;
     const term = debouncedBarTerm.trim();
     if (!term) {
-      setBarSearchResults([]);
+      setBarSearchState(createInitialPaginatedState<BarragemMaster>(PAGE_SIZE));
       setBarSearchError(null);
       return;
     }
@@ -340,15 +476,26 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     let alive = true;
     setLoadingBar(true);
     setBarSearchError(null);
-    void searchBarragens(term, selectedEmpreendedorId, 25)
+    setBarSearchState(resetPaginatedSearchState<BarragemMaster>(term, PAGE_SIZE));
+    void searchBarragens(term, selectedEmpreendedorId, PAGE_SIZE, 1)
       .then((res) => {
         if (!alive) return;
         if (res.error) {
-          setBarSearchResults([]);
+          setBarSearchState(resetPaginatedSearchState<BarragemMaster>(term, PAGE_SIZE));
           setBarSearchError(res.error);
           setStatusError((prev) => prev || res.error || null);
         } else {
-          setBarSearchResults(res.data);
+          setBarSearchState((prev) =>
+            applyPaginatedPageResult(prev, {
+              query: term,
+              page: res.page || 1,
+              pageSize: PAGE_SIZE,
+              items: res.data,
+              hasMore: res.hasMore,
+              total: typeof res.total === 'number' ? res.total : null,
+              append: false,
+            })
+          );
           setAdministraReady(true);
           setBarSearchError(null);
         }
@@ -362,12 +509,12 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     };
   }, [debouncedBarTerm, selectedEmpreendedorId, readOnly]);
 
-  // Busca ativa de RTs ao digitar qualquer dado
+  // Busca ativa de RTs ao digitar qualquer dado (reinicia paginação ao mudar termo)
   useEffect(() => {
     if (readOnly || !showRtSelector) return;
     const term = debouncedRtTerm.trim();
     if (!term) {
-      setRtSearchResults([]);
+      setRtSearchState(createInitialPaginatedState<ResponsavelTecnicoSearchItem>(PAGE_SIZE));
       setRtSearchError(null);
       return;
     }
@@ -375,15 +522,26 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     let alive = true;
     setLoadingRt(true);
     setRtSearchError(null);
-    void searchResponsaveisTecnicos(term, 25)
+    setRtSearchState(resetPaginatedSearchState<ResponsavelTecnicoSearchItem>(term, PAGE_SIZE));
+    void searchResponsaveisTecnicos(term, PAGE_SIZE, 1)
       .then((res) => {
         if (!alive) return;
         if (res.error) {
-          setRtSearchResults([]);
+          setRtSearchState(resetPaginatedSearchState<ResponsavelTecnicoSearchItem>(term, PAGE_SIZE));
           setRtSearchError(res.error);
           setStatusError((prev) => prev || res.error || null);
         } else {
-          setRtSearchResults(res.data);
+          setRtSearchState((prev) =>
+            applyPaginatedPageResult(prev, {
+              query: term,
+              page: res.page || 1,
+              pageSize: PAGE_SIZE,
+              items: res.data,
+              hasMore: res.hasMore,
+              total: typeof res.total === 'number' ? res.total : null,
+              append: false,
+            })
+          );
           setAdministraReady(true);
           setRtSearchError(null);
         }
@@ -396,6 +554,93 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
       alive = false;
     };
   }, [debouncedRtTerm, readOnly, showRtSelector]);
+
+  const handleLoadMoreEmpSearch = async () => {
+    const term = debouncedEmpTerm.trim();
+    if (!term || !empSearchState.hasMore || loadingMoreEmpSearch) return;
+    const nextPage = empSearchState.page + 1;
+    setLoadingMoreEmpSearch(true);
+    try {
+      const res = await searchEmpreendedores(term, PAGE_SIZE, nextPage);
+      if (!res.error) {
+        setEmpSearchState((prev) =>
+          prev.query !== term
+            ? prev
+            : applyPaginatedPageResult(prev, {
+                query: term,
+                page: res.page || nextPage,
+                pageSize: PAGE_SIZE,
+                items: res.data,
+                hasMore: res.hasMore,
+                total: typeof res.total === 'number' ? res.total : prev.total,
+                append: true,
+              })
+        );
+      } else {
+        setEmpSearchError(res.error);
+      }
+    } finally {
+      setLoadingMoreEmpSearch(false);
+    }
+  };
+
+  const handleLoadMoreBarSearch = async () => {
+    const term = debouncedBarTerm.trim();
+    if (!term || !barSearchState.hasMore || loadingMoreBarSearch) return;
+    const nextPage = barSearchState.page + 1;
+    setLoadingMoreBarSearch(true);
+    try {
+      const res = await searchBarragens(term, selectedEmpreendedorId, PAGE_SIZE, nextPage);
+      if (!res.error) {
+        setBarSearchState((prev) =>
+          prev.query !== term
+            ? prev
+            : applyPaginatedPageResult(prev, {
+                query: term,
+                page: res.page || nextPage,
+                pageSize: PAGE_SIZE,
+                items: res.data,
+                hasMore: res.hasMore,
+                total: typeof res.total === 'number' ? res.total : prev.total,
+                append: true,
+              })
+        );
+      } else {
+        setBarSearchError(res.error);
+      }
+    } finally {
+      setLoadingMoreBarSearch(false);
+    }
+  };
+
+  const handleLoadMoreRtSearch = async () => {
+    const term = debouncedRtTerm.trim();
+    if (!term || !rtSearchState.hasMore || loadingMoreRtSearch) return;
+    const nextPage = rtSearchState.page + 1;
+    setLoadingMoreRtSearch(true);
+    try {
+      const res = await searchResponsaveisTecnicos(term, PAGE_SIZE, nextPage);
+      if (!res.error) {
+        setRtSearchState((prev) =>
+          prev.query !== term
+            ? prev
+            : applyPaginatedPageResult(prev, {
+                query: term,
+                page: res.page || nextPage,
+                pageSize: PAGE_SIZE,
+                items: res.data,
+                hasMore: res.hasMore,
+                total: typeof res.total === 'number' ? res.total : prev.total,
+                append: true,
+              })
+        );
+      } else {
+        setRtSearchError(res.error);
+      }
+    } finally {
+      setLoadingMoreRtSearch(false);
+    }
+  };
 
   useEffect(() => {
     if (!selectedEmpreendedorId && !selectedBarragemId && !cpfCnpjFallback && !snisbFallback) {
@@ -432,8 +677,8 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
       const empDigits = (emp.cpf_cnpj || '').replace(/\D/g, '');
       return text.includes(q) || (digits.length >= 2 && empDigits.includes(digits));
     });
-    return mergeUniqueById(empSearchResults, localMatches);
-  }, [empTerm, empOptions, empSearchResults]);
+    return mergeUniqueById(empSearchState.items, localMatches);
+  }, [empTerm, empOptions, empSearchState.items]);
 
   const visibleBarResults = useMemo(() => {
     const q = normalizeSearchText(barTerm);
@@ -444,8 +689,8 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
       );
       return text.includes(q);
     });
-    return mergeUniqueById(barSearchResults, localMatches);
-  }, [barTerm, barOptions, barSearchResults]);
+    return mergeUniqueById(barSearchState.items, localMatches);
+  }, [barTerm, barOptions, barSearchState.items]);
 
   const visibleRtResults = useMemo(() => {
     const q = normalizeSearchText(rtTerm);
@@ -458,23 +703,31 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
       const rtDigits = (rt.cpf || '').replace(/\D/g, '');
       return text.includes(q) || (digits.length >= 2 && rtDigits.includes(digits));
     });
-    return mergeUniqueById(rtSearchResults, localMatches);
-  }, [rtTerm, rtOptions, rtSearchResults]);
+    return mergeUniqueById(rtSearchState.items, localMatches);
+  }, [rtTerm, rtOptions, rtSearchState.items]);
 
   const handleUseEmpreendedor = (emp: EmpreendedorMaster) => {
-    setEmpOptions((prev) => mergeUniqueById([emp], prev));
+    setSelectedEmpRecord(emp);
+    setEmpPageState((prev) => ({
+      ...prev,
+      items: preserveSelectedItemInList(prev.items, emp),
+    }));
     onSelectEmpreendedor?.(emp);
     setEmpTerm('');
     setDebouncedEmpTerm('');
-    setEmpSearchResults([]);
+    setEmpSearchState(createInitialPaginatedState<EmpreendedorMaster>(PAGE_SIZE));
   };
 
   const handleUseBarragem = (bar: BarragemMaster) => {
-    setBarOptions((prev) => mergeUniqueById([bar], prev));
+    setSelectedBarRecord(bar);
+    setBarPageState((prev) => ({
+      ...prev,
+      items: preserveSelectedItemInList(prev.items, bar),
+    }));
     onSelectBarragem?.(bar);
     setBarTerm('');
     setDebouncedBarTerm('');
-    setBarSearchResults([]);
+    setBarSearchState(createInitialPaginatedState<BarragemMaster>(PAGE_SIZE));
   };
 
   const mergeRtArts = useCallback(
@@ -515,7 +768,10 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
   );
 
   const handleUseRt = (rt: ResponsavelTecnicoSearchItem) => {
-    setRtOptions((prev) => mergeUniqueById([rt], prev));
+    setRtPageState((prev) => ({
+      ...prev,
+      items: preserveSelectedItemInList(prev.items, rt),
+    }));
     setSelectedRtId(rt.id);
     setSelectedRtRecord(rt);
     setShowCreateRtForm(false);
@@ -524,7 +780,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     setNewArtForm({ art: '', atividade: '', observacao: '' });
     setRtTerm('');
     setDebouncedRtTerm('');
-    setRtSearchResults([]);
+    setRtSearchState(createInitialPaginatedState<ResponsavelTecnicoSearchItem>(PAGE_SIZE));
     void loadRtArts(rt);
   };
 
@@ -603,13 +859,14 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
       };
       const nextArts = mergeRtArts([savedItem], rtArts);
       setRtArts(nextArts);
-      setRtOptions((prev) =>
-        prev.map((item) =>
+      setRtPageState((prev) => ({
+        ...prev,
+        items: prev.items.map((item) =>
           item.id === selectedRtRecord.id
             ? { ...item, art: item.art || savedItem.art, arts: nextArts }
             : item
-        )
-      );
+        ),
+      }));
       setSelectedRtRecord((prev) =>
         prev ? { ...prev, art: prev.art || savedItem.art, arts: nextArts } : prev
       );
@@ -667,7 +924,10 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
 
       const createdRt = res.data.rt;
       const createdArt = res.data.artItem;
-      setRtOptions((prev) => mergeUniqueById([createdRt], prev));
+      setRtPageState((prev) => ({
+        ...prev,
+        items: preserveSelectedItemInList(prev.items, createdRt),
+      }));
       setSelectedRtId(createdRt.id);
       setSelectedRtRecord(createdRt);
       setShowCreateRtForm(false);
@@ -706,20 +966,27 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
     try {
       await Promise.all([
         loadDiagnostics(),
-        loadInitialEmpreendedores(),
-        loadInitialBarragens(selectedEmpreendedorId),
-        showRtSelector ? loadInitialRts() : Promise.resolve(),
+        fetchEmpreendedoresBrowsePage(1, false),
+        fetchBarragensBrowsePage(1, false, selectedEmpreendedorId),
+        showRtSelector ? fetchRtsBrowsePage(1, false) : Promise.resolve(),
       ]);
     } finally {
       setRefreshingBase(false);
     }
   };
 
-  const empSummaryCount = counts.empreendedores ?? empOptions.length;
-  const barSummaryCount = counts.barragens ?? barOptions.length;
-  const rtSummaryCount = counts.rts ?? rtOptions.length;
+  const empSummaryCount = counts.empreendedores ?? empPageState.total ?? empOptions.length;
+  const barSummaryCount = counts.barragens ?? barPageState.total ?? barOptions.length;
+  const rtSummaryCount = counts.rts ?? rtPageState.total ?? rtOptions.length;
 
-  const isLoadingAny = refreshingBase || loadingEmp || loadingBar || loadingRt;
+  const isLoadingAny =
+    refreshingBase ||
+    loadingEmp ||
+    loadingMoreEmp ||
+    loadingBar ||
+    loadingMoreBar ||
+    loadingRt ||
+    loadingMoreRt;
 
   const hasSelectedEmpInList =
     !selectedEmpreendedorId || empOptions.some((e) => e.id === selectedEmpreendedorId);
@@ -819,7 +1086,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                     onClick={() => {
                       setEmpTerm('');
                       setDebouncedEmpTerm('');
-                      setEmpSearchResults([]);
+                      setEmpSearchState(createInitialPaginatedState<EmpreendedorMaster>(PAGE_SIZE));
                       setEmpSearchError(null);
                     }}
                     aria-label="Limpar busca de empreendedor"
@@ -835,34 +1102,57 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
             {empTerm.trim().length > 0 && (
               <div className="rounded-xl border border-emerald-200 bg-white shadow-lg max-h-60 overflow-y-auto divide-y divide-slate-100">
                 {visibleEmpResults.length > 0 ? (
-                  visibleEmpResults.map((emp) => (
-                    <div
-                      key={emp.id}
-                      className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-emerald-50/50 transition-colors"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm font-black text-slate-900 uppercase truncate">
-                          {emp.razao_social}
-                        </div>
-                        <div className="text-xs text-slate-500 truncate mt-0.5">
-                          {[
-                            emp.cpf_cnpj || null,
-                            emp.num_car ? `CAR: ${emp.num_car}` : null,
-                            emp.municipio || null,
-                          ]
-                            .filter(Boolean)
-                            .join(' • ') || 'Sem documento informado'}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleUseEmpreendedor(emp)}
-                        className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wide shrink-0 shadow-sm transition-colors"
+                  <>
+                    {visibleEmpResults.map((emp) => (
+                      <div
+                        key={emp.id}
+                        className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-emerald-50/50 transition-colors"
                       >
-                        USAR
-                      </button>
+                        <div className="min-w-0">
+                          <div className="text-sm font-black text-slate-900 uppercase truncate">
+                            {emp.razao_social}
+                          </div>
+                          <div className="text-xs text-slate-500 truncate mt-0.5">
+                            {[
+                              emp.cpf_cnpj || null,
+                              emp.num_car ? `CAR: ${emp.num_car}` : null,
+                              emp.municipio || null,
+                            ]
+                              .filter(Boolean)
+                              .join(' • ') || 'Sem documento informado'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleUseEmpreendedor(emp)}
+                          className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wide shrink-0 shadow-sm transition-colors"
+                        >
+                          USAR
+                        </button>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-slate-50 text-[11px] text-slate-600">
+                      <span>
+                        {formatPaginationCounterText(
+                          visibleEmpResults.length,
+                          empSearchState.total,
+                          empSearchState.hasMore,
+                          'empreendedores encontrados'
+                        )}
+                      </span>
+                      {empSearchState.hasMore && (
+                        <button
+                          type="button"
+                          disabled={loadingMoreEmpSearch}
+                          onClick={() => void handleLoadMoreEmpSearch()}
+                          className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold inline-flex items-center gap-1 disabled:opacity-60"
+                        >
+                          {loadingMoreEmpSearch && <Loader2 size={12} className="animate-spin" />}
+                          Carregar mais (+{PAGE_SIZE})
+                        </button>
+                      )}
                     </div>
-                  ))
+                  </>
                 ) : loadingEmp ? (
                   <div className="px-4 py-4 text-xs text-slate-500 flex items-center gap-2">
                     <Loader2 size={14} className="animate-spin text-emerald-600" />
@@ -906,6 +1196,28 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                 </option>
               ))}
             </select>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 px-1">
+              <span>
+                {formatPaginationCounterText(
+                  empOptions.length,
+                  empPageState.total ?? counts.empreendedores,
+                  empPageState.hasMore,
+                  'empreendedores'
+                )}
+              </span>
+              {empPageState.hasMore && (
+                <button
+                  type="button"
+                  disabled={loadingMoreEmp}
+                  onClick={() => void fetchEmpreendedoresBrowsePage(empPageState.page + 1, true)}
+                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold inline-flex items-center gap-1 disabled:opacity-60"
+                >
+                  {loadingMoreEmp && <Loader2 size={12} className="animate-spin" />}
+                  Carregar mais (+{PAGE_SIZE})
+                </button>
+              )}
+            </div>
           </div>
 
           {/* 2. Buscar Barragem */}
@@ -934,7 +1246,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                     onClick={() => {
                       setBarTerm('');
                       setDebouncedBarTerm('');
-                      setBarSearchResults([]);
+                      setBarSearchState(createInitialPaginatedState<BarragemMaster>(PAGE_SIZE));
                       setBarSearchError(null);
                     }}
                     aria-label="Limpar busca de barragem"
@@ -949,34 +1261,57 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
             {barTerm.trim().length > 0 && (
               <div className="rounded-xl border border-emerald-200 bg-white shadow-lg max-h-60 overflow-y-auto divide-y divide-slate-100">
                 {visibleBarResults.length > 0 ? (
-                  visibleBarResults.map((bar) => (
-                    <div
-                      key={bar.id}
-                      className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-emerald-50/50 transition-colors"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm font-black text-slate-900 uppercase truncate">
-                          {bar.nome}
-                        </div>
-                        <div className="text-xs text-slate-500 truncate mt-0.5">
-                          {[
-                            bar.snisb ? `SNISB: ${bar.snisb}` : null,
-                            bar.municipio || null,
-                            bar.empreendedor_nome || null,
-                          ]
-                            .filter(Boolean)
-                            .join(' • ') || 'Sem detalhes adicionais'}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleUseBarragem(bar)}
-                        className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wide shrink-0 shadow-sm transition-colors"
+                  <>
+                    {visibleBarResults.map((bar) => (
+                      <div
+                        key={bar.id}
+                        className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-emerald-50/50 transition-colors"
                       >
-                        USAR
-                      </button>
+                        <div className="min-w-0">
+                          <div className="text-sm font-black text-slate-900 uppercase truncate">
+                            {bar.nome}
+                          </div>
+                          <div className="text-xs text-slate-500 truncate mt-0.5">
+                            {[
+                              bar.snisb ? `SNISB: ${bar.snisb}` : null,
+                              bar.municipio || null,
+                              bar.empreendedor_nome || null,
+                            ]
+                              .filter(Boolean)
+                              .join(' • ') || 'Sem detalhes adicionais'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleUseBarragem(bar)}
+                          className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wide shrink-0 shadow-sm transition-colors"
+                        >
+                          USAR
+                        </button>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-slate-50 text-[11px] text-slate-600">
+                      <span>
+                        {formatPaginationCounterText(
+                          visibleBarResults.length,
+                          barSearchState.total,
+                          barSearchState.hasMore,
+                          'barragens encontradas'
+                        )}
+                      </span>
+                      {barSearchState.hasMore && (
+                        <button
+                          type="button"
+                          disabled={loadingMoreBarSearch}
+                          onClick={() => void handleLoadMoreBarSearch()}
+                          className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold inline-flex items-center gap-1 disabled:opacity-60"
+                        >
+                          {loadingMoreBarSearch && <Loader2 size={12} className="animate-spin" />}
+                          Carregar mais (+{PAGE_SIZE})
+                        </button>
+                      )}
                     </div>
-                  ))
+                  </>
                 ) : loadingBar ? (
                   <div className="px-4 py-4 text-xs text-slate-500 flex items-center gap-2">
                     <Loader2 size={14} className="animate-spin text-emerald-600" />
@@ -1024,6 +1359,40 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                 );
               })}
             </select>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 px-1">
+              <span>
+                {formatPaginationCounterText(
+                  barOptions.length,
+                  barPageState.total ?? counts.barragens,
+                  barPageState.hasMore,
+                  'barragens'
+                )}
+              </span>
+              {barPageState.hasMore && (
+                <button
+                  type="button"
+                  disabled={loadingMoreBar}
+                  onClick={() =>
+                    void fetchBarragensBrowsePage(
+                      barPageState.page + 1,
+                      true,
+                      selectedEmpreendedorId
+                    )
+                  }
+                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold inline-flex items-center gap-1 disabled:opacity-60"
+                >
+                  {loadingMoreBar && <Loader2 size={12} className="animate-spin" />}
+                  Carregar mais (+{PAGE_SIZE})
+                </button>
+              )}
+            </div>
+
+            {selectedEmpreendedorId && !barragemFilterCapabilities.legacyBarragensSupportsEmpreendedorIdFilter && (
+              <p className="text-[11px] text-slate-500 px-1">
+                Barragens vinculadas ao empreendedor selecionado aparecem destacadas com ★ na página carregada; filtragem global por empreendedor depende de suporte no endpoint de leitura.
+              </p>
+            )}
           </div>
 
           {/* 3. Vincular RT da Base */}
@@ -1199,7 +1568,7 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                       onClick={() => {
                         setRtTerm('');
                         setDebouncedRtTerm('');
-                        setRtSearchResults([]);
+                        setRtSearchState(createInitialPaginatedState<ResponsavelTecnicoSearchItem>(PAGE_SIZE));
                         setRtSearchError(null);
                       }}
                       aria-label="Limpar busca de RT"
@@ -1214,38 +1583,61 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
               {rtTerm.trim().length > 0 && (
                 <div className="rounded-xl border border-emerald-200 bg-white shadow-lg max-h-60 overflow-y-auto divide-y divide-slate-100">
                   {visibleRtResults.length > 0 ? (
-                    visibleRtResults.map((rt) => (
-                      <div
-                        key={rt.id}
-                        className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-emerald-50/50 transition-colors"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-black text-slate-900 uppercase truncate">
-                            {rt.nome}
-                          </div>
-                          <div className="text-xs text-slate-500 truncate mt-0.5">
-                            {[
-                              rt.registro_profissional || null,
-                              rt.cpf ? `CPF: ${rt.cpf}` : null,
-                              rt.arts && rt.arts.length > 0
-                                ? `${rt.arts.length} ART(s)`
-                                : rt.art
-                                ? `ART: ${rt.art}`
-                                : null,
-                            ]
-                              .filter(Boolean)
-                              .join(' • ') || 'Sem registro informado'}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleUseRt(rt)}
-                          className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wide shrink-0 shadow-sm transition-colors"
+                    <>
+                      {visibleRtResults.map((rt) => (
+                        <div
+                          key={rt.id}
+                          className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-emerald-50/50 transition-colors"
                         >
-                          USAR
-                        </button>
+                          <div className="min-w-0">
+                            <div className="text-sm font-black text-slate-900 uppercase truncate">
+                              {rt.nome}
+                            </div>
+                            <div className="text-xs text-slate-500 truncate mt-0.5">
+                              {[
+                                rt.registro_profissional || null,
+                                rt.cpf ? `CPF: ${rt.cpf}` : null,
+                                rt.arts && rt.arts.length > 0
+                                  ? `${rt.arts.length} ART(s)`
+                                  : rt.art
+                                  ? `ART: ${rt.art}`
+                                  : null,
+                              ]
+                                .filter(Boolean)
+                                .join(' • ') || 'Sem registro informado'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleUseRt(rt)}
+                            className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wide shrink-0 shadow-sm transition-colors"
+                          >
+                            USAR
+                          </button>
+                        </div>
+                      ))}
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-slate-50 text-[11px] text-slate-600">
+                        <span>
+                          {formatPaginationCounterText(
+                            visibleRtResults.length,
+                            rtSearchState.total,
+                            rtSearchState.hasMore,
+                            'RTs encontrados'
+                          )}
+                        </span>
+                        {rtSearchState.hasMore && (
+                          <button
+                            type="button"
+                            disabled={loadingMoreRtSearch}
+                            onClick={() => void handleLoadMoreRtSearch()}
+                            className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold inline-flex items-center gap-1 disabled:opacity-60"
+                          >
+                            {loadingMoreRtSearch && <Loader2 size={12} className="animate-spin" />}
+                            Carregar mais (+{PAGE_SIZE})
+                          </button>
+                        )}
                       </div>
-                    ))
+                    </>
                   ) : loadingRt ? (
                     <div className="px-4 py-4 text-xs text-slate-500 flex items-center gap-2">
                       <Loader2 size={14} className="animate-spin text-emerald-600" />
@@ -1301,6 +1693,28 @@ export const EcosystemSelector: React.FC<EcosystemSelectorProps> = ({
                   </option>
                 ))}
               </select>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 px-1">
+                <span>
+                  {formatPaginationCounterText(
+                    rtOptions.length,
+                    rtPageState.total ?? counts.rts,
+                    rtPageState.hasMore,
+                    'RTs'
+                  )}
+                </span>
+                {rtPageState.hasMore && (
+                  <button
+                    type="button"
+                    disabled={loadingMoreRt}
+                    onClick={() => void fetchRtsBrowsePage(rtPageState.page + 1, true)}
+                    className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold inline-flex items-center gap-1 disabled:opacity-60"
+                  >
+                    {loadingMoreRt && <Loader2 size={12} className="animate-spin" />}
+                    Carregar mais (+{PAGE_SIZE})
+                  </button>
+                )}
+              </div>
 
               {selectedRtRecord && (
                 <div className="rounded-xl border border-emerald-200 bg-white p-3.5 space-y-3 shadow-sm">

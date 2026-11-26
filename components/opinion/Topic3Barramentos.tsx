@@ -2,12 +2,13 @@ import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { CheckCircle2, ChevronDown, ChevronUp, Database, Droplets, Loader2, Plus, Trash2, Unlink } from 'lucide-react';
 import { OPS_TIPO_ESTRUTURAL, OPS_TIPO_FUNDACAO } from '../../constants';
-import { BarramentoData, EstruturaHidraulica } from '../../types';
+import { BarragemMaster, BarramentoData, EmpreendedorMaster, EstruturaHidraulica } from '../../types';
 import {
   IDADE_SEM_ENCHIMENTO,
   IDADE_SEM_INFORMACAO,
   OPS_RELACAO_BARRAMENTO_MONTANTE,
   evaluateCt5Age,
+  normalizeBarramentoMontanteComplemento,
 } from '../../src/utils/opinionCalculations';
 import { parseGMS } from '../MTMap';
 import {
@@ -16,6 +17,11 @@ import {
   normalizeCoordinateToGMS,
 } from '../../src/utils/coordinateUtils';
 import { CLASSIFICA_INTEGRATION_ARCHITECTURE } from '../../src/config/integrationArchitecture';
+import {
+  AdministraBarragemMontantePicker,
+  AdministraEmpreendedorMontantePicker,
+} from './AdministraMontantePickers';
+import { CondicaoAreaEmpreendedorFieldset } from './Topic2PedidoEmpreendedor';
 
 const MiniMap: React.FC<{ lat: string; long: string }> = ({ lat, long }) => {
   const mapRef = useRef<HTMLDivElement>(null);
@@ -95,9 +101,13 @@ interface BarramentoFormProps {
   idx?: number;
   readOnly?: boolean;
   linkedBarragemId?: string;
+  mainCarFallback?: string;
   registeringBarragemKey?: string | null;
   onRegisterBarragem?: (isMain: boolean, idx: number, data: BarramentoData) => Promise<void>;
   onUnlinkBarragem?: (isMain: boolean, idx: number) => void;
+  onSelectUpstreamBarragem?: (idx: number, bar: BarragemMaster) => void;
+  onSelectUpstreamEmpreendedor?: (idx: number, emp: EmpreendedorMaster) => void;
+  onClearUpstreamEmpreendedor?: (idx: number) => void;
   updateBarramento: (
     isMain: boolean,
     idx: number,
@@ -122,9 +132,13 @@ const BarramentoForm: React.FC<BarramentoFormProps> = ({
   idx = 0,
   readOnly = false,
   linkedBarragemId,
+  mainCarFallback,
   registeringBarragemKey,
   onRegisterBarragem,
   onUnlinkBarragem,
+  onSelectUpstreamBarragem,
+  onSelectUpstreamEmpreendedor,
+  onClearUpstreamEmpreendedor,
   updateBarramento,
   removeUpstreamDam,
   updateStructure,
@@ -138,6 +152,9 @@ const BarramentoForm: React.FC<BarramentoFormProps> = ({
   const ageEval = evaluateCt5Age(data.idade);
   const isSpecialAge =
     ageEval.modo === 'sem_enchimento' || ageEval.modo === 'sem_informacao';
+  const montanteComplemento = !isMain
+    ? normalizeBarramentoMontanteComplemento(data)
+    : null;
 
   useEffect(() => {
     const rawLat = (data.lat || '').trim();
@@ -212,6 +229,141 @@ const BarramentoForm: React.FC<BarramentoFormProps> = ({
               Pendente: selecione a relação desta barragem a montante com a barragem principal.
             </p>
           )}
+        </div>
+      )}
+
+      {!isMain && onSelectUpstreamBarragem && (
+        <AdministraBarragemMontantePicker
+          selectedBarragemId={data.barragemId}
+          selectedBarragemNome={data.nome}
+          readOnly={readOnly}
+          onSelectBarragem={(bar) => onSelectUpstreamBarragem(idx, bar)}
+          onUnlinkBarragem={
+            onUnlinkBarragem ? () => onUnlinkBarragem(false, idx) : undefined
+          }
+        />
+      )}
+
+      {!isMain && montanteComplemento && (
+        <div className="rounded-lg border border-emerald-200 bg-white p-3 space-y-3">
+          <div>
+            <h4 className="text-xs font-bold text-slate-700">
+              Identificação fundiária e condição na área (opcional)
+            </h4>
+            <p className="text-[11px] text-slate-500">
+              Campos opcionais armazenados no parecer sem afetar a conclusão da classificação.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="md:col-span-2">
+              <label
+                htmlFor={`montante-${idx}-mesmo-car`}
+                className="block text-xs font-bold text-slate-600 mb-1"
+              >
+                Está no mesmo CAR da barragem principal?
+              </label>
+              <select
+                id={`montante-${idx}-mesmo-car`}
+                disabled={readOnly}
+                value={montanteComplemento.mesmoCarPrincipal}
+                onChange={(e) =>
+                  updateBarramento(
+                    false,
+                    idx,
+                    'mesmoCarPrincipal',
+                    e.target.value as '' | 'sim' | 'nao'
+                  )
+                }
+                className="w-full md:w-72 rounded-lg border-slate-400 bg-[#F5F5F5] p-2 text-xs font-medium focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <option value="">Não informado</option>
+                <option value="sim">Sim</option>
+                <option value="nao">Não</option>
+              </select>
+              {montanteComplemento.mesmoCarPrincipal === 'sim' && mainCarFallback && (
+                <p className="text-[11px] text-emerald-700 mt-1">
+                  CAR de referência da barragem principal: <strong>{mainCarFallback}</strong>
+                </p>
+              )}
+            </div>
+
+            {montanteComplemento.mesmoCarPrincipal === 'nao' && (
+              <>
+                <div>
+                  <label
+                    htmlFor={`montante-${idx}-car-proprio`}
+                    className="block text-xs font-bold text-slate-500 mb-1"
+                  >
+                    CAR/MT próprio desta barragem
+                  </label>
+                  <input
+                    id={`montante-${idx}-car-proprio`}
+                    type="text"
+                    disabled={readOnly}
+                    value={montanteComplemento.carProprio}
+                    onChange={(e) =>
+                      updateBarramento(false, idx, 'carProprio', e.target.value)
+                    }
+                    placeholder="Ex.: MT-5103403-..."
+                    className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-2 text-xs focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none disabled:opacity-60"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor={`montante-${idx}-empreendimento-nome`}
+                    className="block text-xs font-bold text-slate-500 mb-1"
+                  >
+                    Propriedade / empreendimento
+                  </label>
+                  <input
+                    id={`montante-${idx}-empreendimento-nome`}
+                    type="text"
+                    disabled={readOnly}
+                    value={montanteComplemento.empreendimentoNome}
+                    onChange={(e) =>
+                      updateBarramento(false, idx, 'empreendimentoNome', e.target.value)
+                    }
+                    placeholder="Nome da propriedade ou empreendimento"
+                    className="w-full rounded-lg border-slate-400 bg-[#F5F5F5] p-2 text-xs focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all outline-none disabled:opacity-60"
+                  />
+                </div>
+
+                {onSelectUpstreamEmpreendedor && onClearUpstreamEmpreendedor && (
+                  <div className="md:col-span-2">
+                    <AdministraEmpreendedorMontantePicker
+                      selectedEmpreendedorId={montanteComplemento.empreendedorId}
+                      selectedEmpreendedorNome={montanteComplemento.empreendedorNome}
+                      readOnly={readOnly}
+                      onSelectEmpreendedor={(emp) =>
+                        onSelectUpstreamEmpreendedor(idx, emp)
+                      }
+                      onClearEmpreendedor={() => onClearUpstreamEmpreendedor(idx)}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            <CondicaoAreaEmpreendedorFieldset
+              idPrefix={`montante-${idx}-`}
+              condicaoArea={montanteComplemento.condicaoArea}
+              vigenciaContratoAnos={montanteComplemento.vigenciaContratoAnos}
+              vigenciaInicio={montanteComplemento.vigenciaInicio}
+              readOnly={readOnly}
+              onChangeCondicaoArea={(val) =>
+                updateBarramento(false, idx, 'condicaoArea', val)
+              }
+              onChangeVigenciaAnos={(val) =>
+                updateBarramento(false, idx, 'vigenciaContratoAnos', val)
+              }
+              onChangeVigenciaInicio={(val) =>
+                updateBarramento(false, idx, 'vigenciaInicio', val)
+              }
+              onClear={() => updateBarramento(false, idx, 'condicaoArea', '')}
+            />
+          </div>
         </div>
       )}
 
@@ -858,9 +1010,13 @@ interface Topic3BarramentosProps {
   barragemPrincipal: BarramentoData;
   barragensMontante: BarramentoData[];
   barragemId?: string;
+  mainCarFallback?: string;
   registeringBarragemKey?: string | null;
   onRegisterBarragem?: (isMain: boolean, idx: number, data: BarramentoData) => Promise<void>;
   onUnlinkBarragem?: (isMain: boolean, idx: number) => void;
+  onSelectUpstreamBarragem?: (idx: number, bar: BarragemMaster) => void;
+  onSelectUpstreamEmpreendedor?: (idx: number, emp: EmpreendedorMaster) => void;
+  onClearUpstreamEmpreendedor?: (idx: number) => void;
   isOpen: boolean;
   readOnly?: boolean;
   onToggleSection: () => void;
@@ -887,9 +1043,13 @@ export const Topic3Barramentos: React.FC<Topic3BarramentosProps> = ({
   barragemPrincipal,
   barragensMontante,
   barragemId,
+  mainCarFallback,
   registeringBarragemKey,
   onRegisterBarragem,
   onUnlinkBarragem,
+  onSelectUpstreamBarragem,
+  onSelectUpstreamEmpreendedor,
+  onClearUpstreamEmpreendedor,
   isOpen,
   readOnly = false,
   onToggleSection,
@@ -972,9 +1132,13 @@ export const Topic3Barramentos: React.FC<Topic3BarramentosProps> = ({
                 isMain={false}
                 idx={idx}
                 readOnly={readOnly}
+                mainCarFallback={mainCarFallback}
                 registeringBarragemKey={registeringBarragemKey}
                 onRegisterBarragem={onRegisterBarragem}
                 onUnlinkBarragem={onUnlinkBarragem}
+                onSelectUpstreamBarragem={onSelectUpstreamBarragem}
+                onSelectUpstreamEmpreendedor={onSelectUpstreamEmpreendedor}
+                onClearUpstreamEmpreendedor={onClearUpstreamEmpreendedor}
                 updateBarramento={updateBarramento}
                 updateStructure={updateStructure}
                 addStructure={addStructure}

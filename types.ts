@@ -143,6 +143,14 @@ export interface BarramentoData {
   adequacaoSeguranca?: string;
   barragemId?: string;
   sistemaOrigem?: SistemaOrigem;
+  mesmoCarPrincipal?: '' | 'sim' | 'nao';
+  carProprio?: string;
+  empreendimentoNome?: string;
+  empreendedorId?: string;
+  empreendedorNome?: string;
+  condicaoArea?: '' | 'proprietario' | 'arrendatario';
+  vigenciaContratoAnos?: string;
+  vigenciaInicio?: string;
 }
 
 export interface ResponsavelTecnicoEntry {
