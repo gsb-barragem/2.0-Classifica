@@ -749,49 +749,6 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     });
   };
 
-  const handleSelectUpstreamBarragem = (idx: number, bar: BarragemMaster) => {
-    setFormData((prev) => {
-      const newArr = [...(prev.barragensMontante || [])];
-      if (!newArr[idx]) return prev;
-      newArr[idx] = applySelectedBarragemToMontante(newArr[idx], bar);
-      return { ...prev, barragensMontante: newArr };
-    });
-  };
-
-  const handleSelectUpstreamEmpreendedor = (idx: number, emp: EmpreendedorMaster) => {
-    setFormData((prev) => {
-      const newArr = [...(prev.barragensMontante || [])];
-      const current = newArr[idx];
-      if (!current) return prev;
-      const nextNome = resolveNonMaskedAdministraText(emp.razao_social, current.empreendedorNome);
-      const nextCar =
-        current.mesmoCarPrincipal === 'nao' && !(current.carProprio || '').trim()
-          ? resolveNonMaskedAdministraText(emp.num_car, '')
-          : current.carProprio;
-      newArr[idx] = {
-        ...current,
-        empreendedorId: emp.id,
-        empreendedorNome: nextNome,
-        carProprio: nextCar,
-      };
-      return { ...prev, barragensMontante: newArr };
-    });
-  };
-
-  const handleClearUpstreamEmpreendedor = (idx: number) => {
-    setFormData((prev) => {
-      const newArr = [...(prev.barragensMontante || [])];
-      const current = newArr[idx];
-      if (!current) return prev;
-      newArr[idx] = {
-        ...current,
-        empreendedorId: '',
-        empreendedorNome: '',
-      };
-      return { ...prev, barragensMontante: newArr };
-    });
-  };
-
   const updateStructure = (
     isMain: boolean,
     barramentoIdx: number,
@@ -1090,6 +1047,51 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
     });
   };
 
+  const handleSelectUpstreamBarragem = (idx: number, bar: BarragemMaster) => {
+    setFormData((prev) => {
+      const updatedMont = [...(prev.barragensMontante || [])];
+      if (!updatedMont[idx]) return prev;
+      updatedMont[idx] = applySelectedBarragemToMontante(updatedMont[idx], bar);
+      return { ...prev, barragensMontante: updatedMont };
+    });
+  };
+
+  const handleSelectUpstreamEmpreendedor = (idx: number, emp: EmpreendedorMaster) => {
+    setFormData((prev) => {
+      const updatedMont = [...(prev.barragensMontante || [])];
+      if (!updatedMont[idx]) return prev;
+      const current = updatedMont[idx];
+      const nextNome = resolveNonMaskedAdministraText(
+        emp.razao_social,
+        current.empreendedorNome || ''
+      );
+      const nextCar =
+        !(current.carProprio || '').trim() && current.mesmoCarPrincipal === 'nao'
+          ? resolveNonMaskedAdministraText(emp.num_car, '')
+          : current.carProprio;
+      updatedMont[idx] = {
+        ...current,
+        empreendedorId: emp.id || current.empreendedorId,
+        empreendedorNome: nextNome,
+        ...(current.mesmoCarPrincipal === 'nao' ? { carProprio: nextCar } : {}),
+      };
+      return { ...prev, barragensMontante: updatedMont };
+    });
+  };
+
+  const handleClearUpstreamEmpreendedor = (idx: number) => {
+    setFormData((prev) => {
+      const updatedMont = [...(prev.barragensMontante || [])];
+      if (!updatedMont[idx]) return prev;
+      updatedMont[idx] = {
+        ...updatedMont[idx],
+        empreendedorId: '',
+        empreendedorNome: '',
+      };
+      return { ...prev, barragensMontante: updatedMont };
+    });
+  };
+
   const getConclusaoPendencias = (): string[] => {
     const missingUpstreamRelations = (formData.barragensMontante || [])
       .map((bm, i) =>
@@ -1199,7 +1201,9 @@ const OpinionForm: React.FC<OpinionFormProps> = ({ onBack, initialData, readOnly
       return;
     }
 
-    const upstreamCondicaoValidation = validateUpstreamCondicaoAreaData(formData.barragensMontante);
+    const upstreamCondicaoValidation = validateUpstreamCondicaoAreaData(
+      formData.barragensMontante
+    );
     if (!upstreamCondicaoValidation.valid && upstreamCondicaoValidation.firstError) {
       toast.error(upstreamCondicaoValidation.firstError);
       return;

@@ -686,8 +686,8 @@ export function applySelectedBarragemToMontante(
       ? incomingNome
       : existing.nome;
 
-  const incomingLatDec = safeCoordinateNumber(bar.lat_decimal, 90);
-  const incomingLongDec = safeCoordinateNumber(bar.long_decimal, 180);
+  const incomingLatDec = parseStrictCoordinateNumber(bar.lat_decimal, 90);
+  const incomingLongDec = parseStrictCoordinateNumber(bar.long_decimal, 180);
   const safeIncomingLat =
     !isMaskedAdministraValue(bar.lat_gms) || incomingLatDec !== null
       ? resolveSafeCoordinateGms(
