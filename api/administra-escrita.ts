@@ -1,8 +1,24 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import {
+  createSupabaseAdministraOutboxStore,
+  enqueueAndDispatchAdministraOperacao,
+  OutboxStorageError,
+  reprocessAdministraOutbox,
+  type AdministraOutboxEstado,
+  type AdministraOutboxRecord,
+  type AdministraOutboxStore,
+} from '../server/administraOutbox.js';
+import {
+  dispatchAdministraS2sOperacao,
+  OperacaoValidationError,
+} from '../server/administraS2sOperacoes.js';
 
 export type AdministraEscritaAction =
   | 'listar_arts_rt'
+  | 'operacao_s2s'
+  | 'outbox_reprocessar'
+  | 'outbox_listar'
   | 'salvar_art_rt'
   | 'salvar_rt'
   | 'salvar_empreendedor'
@@ -13,6 +29,16 @@ export const BLOCKED_WRITE_ACTIONS = new Set<AdministraEscritaAction>([
   'salvar_rt',
   'salvar_empreendedor',
   'salvar_barragem',
+]);
+
+const S2S_OUTBOX_ESTADO_SET = new Set<AdministraOutboxEstado>([
+  'pendente',
+  'processando',
+  'concluida',
+  'aguardando_aprovacao',
+  'conflito',
+  'erro_temporario',
+  'rejeitada',
 ]);
 
 export const ADMINISTRA_MASTER_WRITE_BLOCKED_CODE = 'ADMINISTRA_MASTER_WRITE_BLOCKED';
@@ -62,6 +88,32 @@ export interface AdministraEscritaDeps {
   verifySession?: (bearerToken: string) => Promise<SessionVerificationResult>;
   getAdministraClient?: (classificaUrl?: string) => AdministraClientCheckResult;
   fetchImpl?: typeof fetch;
+  getOutboxStore?: () => AdministraOutboxStore;
+  dispatchS2sOperacao?: typeof dispatchAdministraS2sOperacao;
+  s2sEnv?: NodeJS.ProcessEnv;
+  now?: () => Date;
+}
+
+function summarizeOutboxRecord(record: AdministraOutboxRecord) {
+  return {
+    id: record.id,
+    operacao: record.operacao,
+    entidade_tipo: record.entidade_tipo,
+    entidade_id: record.entidade_id,
+    idempotency_key: record.idempotency_key,
+    estado: record.estado,
+    tentativas: record.tentativas,
+    max_tentativas: record.max_tentativas,
+    proxima_tentativa_em: record.proxima_tentativa_em,
+    resposta_http_status: record.resposta_http_status,
+    resposta_codigo: record.resposta_codigo,
+    ultimo_erro: record.ultimo_erro,
+    entidade_id_retorno: record.entidade_id_retorno,
+    solicitacao_id_retorno: record.solicitacao_id_retorno,
+    created_at: record.created_at,
+    updated_at: record.updated_at,
+    processado_em: record.processado_em,
+  };
 }
 
 function normalizeOrigin(rawUrl?: string): string {
@@ -637,7 +689,14 @@ export function createAdministraEscritaHandler(deps: AdministraEscritaDeps = {})
       return;
     }
 
-    if (rawAction !== 'listar_arts_rt') {
+    const allowedServerActions = new Set([
+      'listar_arts_rt',
+      'operacao_s2s',
+      'outbox_reprocessar',
+      'outbox_listar',
+    ]);
+
+    if (!allowedServerActions.has(rawAction)) {
       sendJson(res, 400, {
         ok: false,
         blocked: false,
@@ -670,6 +729,211 @@ export function createAdministraEscritaHandler(deps: AdministraEscritaDeps = {})
         error: session.error,
       });
       return;
+    }
+
+    if (rawAction === 'operacao_s2s') {
+      if (session.userRole === 'Visualizador') {
+        sendJson(res, 403, {
+          ok: false,
+          code: 'FORBIDDEN_ROLE',
+          error: 'Usuários com perfil Visualizador não podem enviar operações cadastrais ao Administra.',
+        });
+        return;
+      }
+
+      try {
+        const store = deps.getOutboxStore
+          ? deps.getOutboxStore()
+          : createSupabaseAdministraOutboxStore({ env: deps.s2sEnv, fetchImpl });
+
+        const result = await enqueueAndDispatchAdministraOperacao(
+          {
+            input: {
+              operacao: typeof body.operacao === 'string' ? body.operacao : '',
+              entidadeTipo:
+                typeof body.entidadeTipo === 'string'
+                  ? body.entidadeTipo
+                  : typeof body.entidade_tipo === 'string'
+                    ? body.entidade_tipo
+                    : null,
+              entidadeId:
+                typeof body.entidadeId === 'string'
+                  ? body.entidadeId
+                  : typeof body.entidade_id === 'string'
+                    ? body.entidade_id
+                    : null,
+              dados:
+                body.dados && typeof body.dados === 'object' && !Array.isArray(body.dados)
+                  ? (body.dados as Record<string, unknown>)
+                  : null,
+              justificativa:
+                typeof body.justificativa === 'string' ? body.justificativa : null,
+              origemDocumentoTipo:
+                typeof body.origemDocumentoTipo === 'string'
+                  ? body.origemDocumentoTipo
+                  : typeof body.origem_documento_tipo === 'string'
+                    ? body.origem_documento_tipo
+                    : null,
+              origemDocumentoId:
+                typeof body.origemDocumentoId === 'string'
+                  ? body.origemDocumentoId
+                  : typeof body.origem_documento_id === 'string'
+                    ? body.origem_documento_id
+                    : null,
+              // Identidade do consumidor vem exclusivamente da sessão verificada no servidor.
+              solicitanteUserId: session.userId,
+            },
+            solicitanteNome: session.userName,
+            solicitanteRole: session.userRole,
+          },
+          {
+            store,
+            dispatchOperacao: deps.dispatchS2sOperacao,
+            env: deps.s2sEnv,
+            fetchImpl,
+            now: deps.now,
+          }
+        );
+
+        sendJson(res, result.httpStatus, {
+          ok: result.ok,
+          deduplicated: result.deduplicated,
+          code: result.code,
+          message: result.message,
+          idempotencyKey: result.record.idempotency_key,
+          estado: result.record.estado,
+          entidadeIdRetorno: result.record.entidade_id_retorno,
+          solicitacaoIdRetorno: result.record.solicitacao_id_retorno,
+          outbox: summarizeOutboxRecord(result.record),
+        });
+        return;
+      } catch (err) {
+        if (err instanceof OperacaoValidationError) {
+          sendJson(res, err.httpStatus, {
+            ok: false,
+            blocked: err.code === 'ADMINISTRA_S2S_OPERATION_BLOCKED',
+            code: err.code,
+            error: err.message,
+          });
+          return;
+        }
+        if (err instanceof OutboxStorageError) {
+          sendJson(res, err.httpStatus, {
+            ok: false,
+            code: err.code,
+            error: err.message,
+          });
+          return;
+        }
+        sendJson(res, 500, {
+          ok: false,
+          code: 'ADMINISTRA_S2S_UNEXPECTED_ERROR',
+          error: 'Erro interno ao processar operação S2S para o Administra.',
+        });
+        return;
+      }
+    }
+
+    if (rawAction === 'outbox_reprocessar') {
+      if (session.userRole === 'Visualizador') {
+        sendJson(res, 403, {
+          ok: false,
+          code: 'FORBIDDEN_ROLE',
+          error: 'Usuários com perfil Visualizador não podem reprocessar operações da outbox.',
+        });
+        return;
+      }
+
+      try {
+        const store = deps.getOutboxStore
+          ? deps.getOutboxStore()
+          : createSupabaseAdministraOutboxStore({ env: deps.s2sEnv, fetchImpl });
+
+        const outboxId =
+          typeof body.outboxId === 'string' && body.outboxId.trim()
+            ? body.outboxId.trim()
+            : typeof body.id === 'string' && body.id.trim()
+              ? body.id.trim()
+              : undefined;
+        const limit = typeof body.limit === 'number' ? body.limit : undefined;
+        const force = body.force === true;
+
+        const reprocessed = await reprocessAdministraOutbox(
+          { id: outboxId, limit, force },
+          {
+            store,
+            dispatchOperacao: deps.dispatchS2sOperacao,
+            env: deps.s2sEnv,
+            fetchImpl,
+            now: deps.now,
+          }
+        );
+
+        sendJson(res, 200, {
+          ok: reprocessed.ok,
+          processed: reprocessed.processed,
+          succeeded: reprocessed.succeeded,
+          awaitingApproval: reprocessed.awaitingApproval,
+          conflicts: reprocessed.conflicts,
+          failedTemporary: reprocessed.failedTemporary,
+          rejected: reprocessed.rejected,
+          items: reprocessed.items.map(summarizeOutboxRecord),
+        });
+        return;
+      } catch (err) {
+        if (err instanceof OutboxStorageError) {
+          sendJson(res, err.httpStatus, {
+            ok: false,
+            code: err.code,
+            error: err.message,
+          });
+          return;
+        }
+        sendJson(res, 500, {
+          ok: false,
+          code: 'OUTBOX_REPROCESS_ERROR',
+          error: 'Falha ao reprocessar outbox de operações S2S.',
+        });
+        return;
+      }
+    }
+
+    if (rawAction === 'outbox_listar') {
+      try {
+        const store = deps.getOutboxStore
+          ? deps.getOutboxStore()
+          : createSupabaseAdministraOutboxStore({ env: deps.s2sEnv, fetchImpl });
+        const limit = Math.max(
+          1,
+          Math.min(50, typeof body.limit === 'number' ? Math.trunc(body.limit) : 20)
+        );
+        const rawEstado =
+          typeof body.estado === 'string' ? body.estado.trim() : '';
+        const estado = S2S_OUTBOX_ESTADO_SET.has(rawEstado as AdministraOutboxEstado)
+          ? (rawEstado as AdministraOutboxEstado)
+          : undefined;
+        const items = await store.listRecent({ limit, estado });
+        sendJson(res, 200, {
+          ok: true,
+          items: items.map(summarizeOutboxRecord),
+        });
+        return;
+      } catch (err) {
+        if (err instanceof OutboxStorageError) {
+          sendJson(res, err.httpStatus, {
+            ok: false,
+            code: err.code,
+            error: err.message,
+          });
+          return;
+        }
+        sendJson(res, 500, {
+          ok: false,
+          code: 'OUTBOX_LIST_ERROR',
+          error: 'Falha ao consultar outbox de operações S2S.',
+        });
+        return;
+      }
     }
 
     const rtId = typeof body.rtId === 'string' ? body.rtId.trim() : '';

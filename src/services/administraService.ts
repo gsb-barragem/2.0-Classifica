@@ -2973,3 +2973,316 @@ export async function fetchAllBarragensV2Pages(
     currentCursor = nextCursor;
   }
 }
+
+export type AdministraS2sOperacaoTipo =
+  | 'cadastrar_empreendedor'
+  | 'cadastrar_barragem'
+  | 'cadastrar_rt'
+  | 'propor_alteracao_empreendedor'
+  | 'propor_alteracao_barragem'
+  | 'propor_alteracao_rt';
+
+export type AdministraOutboxEstadoClient =
+  | 'pendente'
+  | 'processando'
+  | 'concluida'
+  | 'aguardando_aprovacao'
+  | 'conflito'
+  | 'erro_temporario'
+  | 'rejeitada';
+
+export interface AdministraOutboxSummary {
+  id: string;
+  operacao: AdministraS2sOperacaoTipo;
+  entidade_tipo: 'empreendedor' | 'barragem' | 'responsavel_tecnico';
+  entidade_id: string | null;
+  idempotency_key: string;
+  estado: AdministraOutboxEstadoClient;
+  tentativas: number;
+  max_tentativas: number;
+  proxima_tentativa_em: string | null;
+  resposta_http_status: number | null;
+  resposta_codigo: string | null;
+  ultimo_erro: string | null;
+  entidade_id_retorno: string | null;
+  solicitacao_id_retorno: string | null;
+  created_at: string;
+  updated_at: string;
+  processado_em: string | null;
+}
+
+export interface SubmitAdministraS2sOperacaoInput {
+  operacao: AdministraS2sOperacaoTipo;
+  entidadeTipo?: 'empreendedor' | 'barragem' | 'responsavel_tecnico';
+  entidadeId?: string | null;
+  dados: Record<string, unknown>;
+  justificativa?: string | null;
+  origemDocumentoTipo?: string | null;
+  origemDocumentoId?: string | null;
+}
+
+export interface SubmitAdministraS2sOperacaoResult {
+  ok: boolean;
+  status: number;
+  code: string;
+  message: string;
+  deduplicated?: boolean;
+  idempotencyKey?: string;
+  estado?: AdministraOutboxEstadoClient;
+  entidadeIdRetorno?: string | null;
+  solicitacaoIdRetorno?: string | null;
+  outbox?: AdministraOutboxSummary;
+}
+
+export interface AdministraS2sClientDeps {
+  getAccessToken?: () => Promise<string | null>;
+  fetchImpl?: typeof fetch;
+}
+
+export async function submitAdministraS2sOperation(
+  input: SubmitAdministraS2sOperacaoInput,
+  deps: AdministraS2sClientDeps = {}
+): Promise<SubmitAdministraS2sOperacaoResult> {
+  const token = deps.getAccessToken
+    ? await deps.getAccessToken()
+    : await getClassificaAccessToken();
+
+  if (!token) {
+    return {
+      ok: false,
+      status: 401,
+      code: 'AUTH_REQUIRED',
+      message: 'Sessão autenticada do Classifica CSB obrigatória.',
+    };
+  }
+
+  const fetchFn = deps.fetchImpl ?? fetch;
+  try {
+    const response = await fetchFn('/api/administra-escrita', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        action: 'operacao_s2s',
+        operacao: input.operacao,
+        entidadeTipo: input.entidadeTipo,
+        entidadeId: input.entidadeId ?? null,
+        dados: input.dados,
+        justificativa: input.justificativa ?? null,
+        origemDocumentoTipo: input.origemDocumentoTipo ?? null,
+        origemDocumentoId: input.origemDocumentoId ?? null,
+      }),
+    });
+
+    const json = (await response.json().catch(() => null)) as Record<string, any> | null;
+    if (!json) {
+      return {
+        ok: false,
+        status: response.status || 503,
+        code: 'INVALID_RESPONSE',
+        message: 'Resposta inválida do servidor ao enviar operação S2S.',
+      };
+    }
+
+    const msg =
+      typeof json.message === 'string'
+        ? json.message
+        : typeof json.error === 'string'
+          ? json.error
+          : response.ok
+            ? 'Operação registrada.'
+            : 'Falha ao enviar operação ao Administra Barragens.';
+
+    return {
+      ok: Boolean(response.ok && json.ok),
+      status: response.status,
+      code: typeof json.code === 'string' ? json.code : 'UNKNOWN',
+      message: msg,
+      deduplicated: Boolean(json.deduplicated),
+      idempotencyKey:
+        typeof json.idempotencyKey === 'string' ? json.idempotencyKey : undefined,
+      estado: json.estado,
+      entidadeIdRetorno: json.entidadeIdRetorno ?? null,
+      solicitacaoIdRetorno: json.solicitacaoIdRetorno ?? null,
+      outbox: json.outbox,
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      code: 'NETWORK_ERROR',
+      message: 'Falha de comunicação com /api/administra-escrita.',
+    };
+  }
+}
+
+export async function reprocessAdministraOutboxItems(
+  params: { outboxId?: string; limit?: number; force?: boolean } = {},
+  deps: AdministraS2sClientDeps = {}
+): Promise<{
+  ok: boolean;
+  status: number;
+  processed: number;
+  succeeded: number;
+  awaitingApproval: number;
+  conflicts: number;
+  failedTemporary: number;
+  rejected: number;
+  items: AdministraOutboxSummary[];
+  code?: string;
+  message?: string;
+}> {
+  const token = deps.getAccessToken
+    ? await deps.getAccessToken()
+    : await getClassificaAccessToken();
+
+  if (!token) {
+    return {
+      ok: false,
+      status: 401,
+      processed: 0,
+      succeeded: 0,
+      awaitingApproval: 0,
+      conflicts: 0,
+      failedTemporary: 0,
+      rejected: 0,
+      items: [],
+      code: 'AUTH_REQUIRED',
+      message: 'Sessão autenticada do Classifica CSB obrigatória.',
+    };
+  }
+
+  const fetchFn = deps.fetchImpl ?? fetch;
+  try {
+    const response = await fetchFn('/api/administra-escrita', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        action: 'outbox_reprocessar',
+        outboxId: params.outboxId,
+        limit: params.limit,
+        force: params.force,
+      }),
+    });
+
+    const json = (await response.json().catch(() => null)) as Record<string, any> | null;
+    if (!json || !response.ok) {
+      return {
+        ok: false,
+        status: response.status || 503,
+        processed: 0,
+        succeeded: 0,
+        awaitingApproval: 0,
+        conflicts: 0,
+        failedTemporary: 0,
+        rejected: 0,
+        items: [],
+        code: typeof json?.code === 'string' ? json.code : 'OUTBOX_REPROCESS_FAILED',
+        message:
+          typeof json?.error === 'string'
+            ? json.error
+            : 'Falha ao reprocessar fila de operações.',
+      };
+    }
+
+    return {
+      ok: Boolean(json.ok),
+      status: response.status,
+      processed: Number(json.processed || 0),
+      succeeded: Number(json.succeeded || 0),
+      awaitingApproval: Number(json.awaitingApproval || 0),
+      conflicts: Number(json.conflicts || 0),
+      failedTemporary: Number(json.failedTemporary || 0),
+      rejected: Number(json.rejected || 0),
+      items: Array.isArray(json.items) ? json.items : [],
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      processed: 0,
+      succeeded: 0,
+      awaitingApproval: 0,
+      conflicts: 0,
+      failedTemporary: 0,
+      rejected: 0,
+      items: [],
+      code: 'NETWORK_ERROR',
+      message: 'Falha de comunicação com /api/administra-escrita.',
+    };
+  }
+}
+
+export async function listAdministraOutboxItems(
+  params: { limit?: number; estado?: AdministraOutboxEstadoClient } = {},
+  deps: AdministraS2sClientDeps = {}
+): Promise<{
+  ok: boolean;
+  status: number;
+  items: AdministraOutboxSummary[];
+  code?: string;
+  message?: string;
+}> {
+  const token = deps.getAccessToken
+    ? await deps.getAccessToken()
+    : await getClassificaAccessToken();
+
+  if (!token) {
+    return {
+      ok: false,
+      status: 401,
+      items: [],
+      code: 'AUTH_REQUIRED',
+      message: 'Sessão autenticada do Classifica CSB obrigatória.',
+    };
+  }
+
+  const fetchFn = deps.fetchImpl ?? fetch;
+  try {
+    const response = await fetchFn('/api/administra-escrita', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        action: 'outbox_listar',
+        limit: params.limit,
+        estado: params.estado,
+      }),
+    });
+
+    const json = (await response.json().catch(() => null)) as Record<string, any> | null;
+    if (!json || !response.ok || !json.ok) {
+      return {
+        ok: false,
+        status: response.status || 503,
+        items: [],
+        code: typeof json?.code === 'string' ? json.code : 'OUTBOX_LIST_FAILED',
+        message:
+          typeof json?.error === 'string'
+            ? json.error
+            : 'Falha ao listar fila de operações S2S.',
+      };
+    }
+
+    return {
+      ok: true,
+      status: response.status,
+      items: Array.isArray(json.items) ? json.items : [],
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      items: [],
+      code: 'NETWORK_ERROR',
+      message: 'Falha de comunicação com /api/administra-escrita.',
+    };
+  }
+}
